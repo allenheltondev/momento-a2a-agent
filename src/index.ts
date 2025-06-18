@@ -3,13 +3,15 @@ import { MomentoAgentRequestHandler } from './agent/request_handler';
 import { MomentoAgentExecutor } from './agent/executor';
 import type { HandleTaskFn } from './agent/executor';
 import { AgentCard } from './types';
+import { register } from './momento/agent_registry';
 
 export type { Task, Message } from './types'
 export interface CreateMomentoAgentOptions extends A2AServerOptions {
   defaultTtlSeconds?: number;
+  registerAgent?: boolean;
 }
 
-export function createMomentoAgent(params: {
+export async function createMomentoAgent(params: {
   cacheName: string;
   apiKey: string;
   skills: AgentCard['skills'];
@@ -61,6 +63,9 @@ export function createMomentoAgent(params: {
       defaultTtlSeconds: options.defaultTtlSeconds ?? 3600
     }
   );
+  if(options.registerAgent){
+    await register(apiKey, cacheName, agentCardFull)
+  }
   const server = new A2AServer(requestHandler, options);
 
   return server.app();

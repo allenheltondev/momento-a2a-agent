@@ -20,7 +20,7 @@ export interface SetOptions {
 export interface MomentoError {
   status: number;
   title: string;
-  description: string;
+  detail: string;
 }
 
 export interface TopicMessage {
@@ -47,6 +47,8 @@ export type MomentoResult<T> =
   | { success: true; data: T; }
   | { success: false; error: MomentoError; };
 
+const INVALID_CACHE_MESSAGE = 'Cache not found';
+
 export class MomentoClient {
   private readonly apiKey: string;
   private readonly cacheName: string;
@@ -72,6 +74,15 @@ export class MomentoClient {
     }
   }
 
+  async isValidConnection(): Promise<boolean> {
+    try {
+      const response = await this.get<MomentoError>('-99999999', { format: 'json' });
+      return response?.detail !== INVALID_CACHE_MESSAGE;
+    } catch (error) {
+      console.error('Error checking connection:', error);
+      return false;
+    }
+  }
   /**
    * Get a value from the cache
    */
@@ -280,7 +291,7 @@ export class MomentoClient {
         error: (error as any).momentoError || {
           status: 500,
           title: 'Unknown Error',
-          description: error instanceof Error ? error.message : 'An unknown error occurred'
+          detail: error instanceof Error ? error.message : 'An unknown error occurred'
         }
       };
     }
@@ -299,7 +310,7 @@ export class MomentoClient {
         error: (error as any).momentoError || {
           status: 500,
           title: 'Unknown Error',
-          description: error instanceof Error ? error.message : 'An unknown error occurred'
+          detail: error instanceof Error ? error.message : 'An unknown error occurred'
         }
       };
     }
@@ -328,7 +339,7 @@ export class MomentoClient {
       return {
         status: response.status,
         title: response.statusText || 'Unknown Error',
-        description: `HTTP ${response.status} error occurred`
+        detail: `HTTP ${response.status} error occurred`
       };
     }
   }

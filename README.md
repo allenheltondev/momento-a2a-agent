@@ -45,19 +45,26 @@ type Env = {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const apiKey = await env.MOMENTO_API_KEY.get();
+		try {
+			const apiKey = await env.MOMENTO_API_KEY.get();
+			const app = await createMomentoAgent({
+				cacheName: "mcp",
+				apiKey,
+				skills: [{ id: "echo", name: "Echo", description: "Repeats your message.", tags: ['echo'] }],
+				handler: async (message) => {
+					const part: any = message.parts?.[0];
+					return `Echo: ${part.text ?? ""}`;
+				},
+				agentCard: { name: 'Echo agent', description: 'An agent that echoes input' },
+				options: { registerAgent: true }
+			});
 
-    const app = await createMomentoAgent({
-      cacheName: "ai",
-      apiKey,
-      skills: [{ name: "Echo", description: "Repeats your message." }]
-      handler: async (message) => { return `Echo: ${message.parts?.[0]?.text ?? ""}`}
-      agentCard: { name: 'Echo agent', description: 'An agent that echoes input' }
-      options: { registerAgent: true }
-    });
-
-    return app.fetch(request, env, ctx);
-  }
+			return app.fetch(request, env, ctx);
+		} catch (err: any) {
+			console.error(JSON.stringify(err, null, 2));
+			return new Response(err.message, { status: 500 });
+		}
+	}
 };
 
 ```

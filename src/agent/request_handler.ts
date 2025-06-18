@@ -50,6 +50,10 @@ export class MomentoAgentRequestHandler {
     this.executor = opts.executor;
   }
 
+  async verifyConnection(): Promise<boolean> {
+    return await this.client.isValidConnection();
+  }
+  
   async getAgentCard(): Promise<AgentCard> {
     return this.agentCard;
   }

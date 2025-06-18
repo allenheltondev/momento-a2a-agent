@@ -10,6 +10,7 @@ vi.mock("../src/momento/client", () => {
       get: vi.fn().mockResolvedValue(undefined),
       set: vi.fn().mockResolvedValue(undefined),
       multiSet: vi.fn().mockResolvedValue(undefined),
+      isValidConnection: vi.fn().mockResolvedValue(true)
     })),
   };
 });

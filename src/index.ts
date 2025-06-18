@@ -63,6 +63,13 @@ export async function createMomentoAgent(params: {
       defaultTtlSeconds: options.defaultTtlSeconds ?? 3600
     }
   );
+
+  const isValidConnection = await requestHandler.verifyConnection();
+  if(!isValidConnection){
+    console.error('The provided cache name does not exist in your Momento account');
+    throw new Error('Invalid cache name');
+  }
+
   if(options.registerAgent){
     await register(apiKey, cacheName, agentCardFull)
   }

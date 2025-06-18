@@ -7,6 +7,9 @@ vi.mock("../src/momento/client", () => {
     MomentoClient: vi.fn().mockImplementation(() => ({
       topicPublish: vi.fn().mockResolvedValue(undefined),
       topicSubscribe: vi.fn().mockResolvedValue({ items: [] }),
+      get: vi.fn().mockResolvedValue(undefined),
+      set: vi.fn().mockResolvedValue(undefined),
+      multiSet: vi.fn().mockResolvedValue(undefined),
     })),
   };
 });
@@ -23,20 +26,20 @@ describe("createMomentoAgent", () => {
     handler = vi.fn().mockResolvedValue("ok");
   });
 
-  it("throws if skills array is empty", () => {
-    expect(() =>
+  it("throws if skills array is empty", async () => {
+    await expect(
       entry.createMomentoAgent({
         cacheName: "c",
         apiKey: "k",
         skills: [],
         handler,
       })
-    ).toThrow(/At least one skill/i);
+    ).rejects.toThrow(/At least one skill/i);
   });
 
-  it("warns if agentCard.url is missing", () => {
+  it("warns if agentCard.url is missing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    entry.createMomentoAgent({
+    await entry.createMomentoAgent({
       cacheName: "c",
       apiKey: "k",
       skills: ["foo"],
@@ -48,19 +51,18 @@ describe("createMomentoAgent", () => {
     warn.mockRestore();
   });
 
-  it("fills in default agentCard values", () => {
-    const app = entry.createMomentoAgent({
+  it("fills in default agentCard values", async () => {
+    const app = await entry.createMomentoAgent({
       cacheName: "c",
       apiKey: "k",
       skills: ["foo"],
       handler,
     });
-    // Should return a Hono app with fetch method
     expect(typeof app.fetch).toBe("function");
   });
 
-  it("uses agentCard fields if provided", () => {
-    const app = entry.createMomentoAgent({
+  it("uses agentCard fields if provided", async () => {
+    const app = await entry.createMomentoAgent({
       cacheName: "c",
       apiKey: "k",
       skills: ["foo"],
@@ -80,12 +82,11 @@ describe("createMomentoAgent", () => {
         defaultOutputModes: ["text", "audio"],
       },
     });
-    // Just smoke test; could fetch agentCard if you wire through Hono/test utils
     expect(typeof app.fetch).toBe("function");
   });
 
-  it("applies custom options (defaultTtlSeconds, basePath)", () => {
-    const app = entry.createMomentoAgent({
+  it("applies custom options (defaultTtlSeconds, basePath)", async () => {
+    const app = await entry.createMomentoAgent({
       cacheName: "c",
       apiKey: "k",
       skills: ["foo"],
@@ -93,6 +94,5 @@ describe("createMomentoAgent", () => {
       options: { defaultTtlSeconds: 42, basePath: "/foo" },
     });
     expect(typeof app.fetch).toBe("function");
-    // Not much else to assert without more hooks, but at least check no error
   });
 });

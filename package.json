@@ -29,7 +29,7 @@
   ],
   "author": "Allen Helton <allenheltondev@gmail.com> (https://github.com/allenheltondev)",
   "license": "ISC",
-   "repository": {
+  "repository": {
     "type": "git",
     "url": "https://github.com/allenheltondev/momento-a2a-agent.git"
   },
@@ -40,7 +40,6 @@
   "devDependencies": {
     "@types/events": "^3.0.3",
     "@types/node": "^24.0.3",
-    "supertest": "^7.1.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

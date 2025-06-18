@@ -1,9 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import {
   AgentCard,
-  Message,
   Task,
-  TaskState,
   TaskStatusUpdateEvent,
   TaskArtifactUpdateEvent,
   MessageSendParams,
@@ -14,9 +12,11 @@ import {
 } from "../types";
 import { MomentoTaskStore, TaskStore } from "../store/task_store";
 import { MomentoClient } from "../momento/client";
-import { AgentExecutionEvent, MomentoEventBus } from "../event/event_bus";
+import { MomentoEventBus } from "../event/event_bus";
 import { MomentoAgentExecutor } from "../agent/executor";
 import { A2AError } from "../server/error";
+import { ResultManager } from "../server/result_manager";
+import { ExecutionEventQueue } from "../event/queue";
 
 const PREFIX = {
   PushConfig: "push-config:",
@@ -59,20 +59,21 @@ export class MomentoAgentRequestHandler {
     const msg = params.message;
     if (!msg.messageId) throw A2AError.invalidParams("message.messageId is required.");
 
-    // Check for existing task
+    const resultManager = new ResultManager(this.taskStore);
+    resultManager.setContext(msg);
+
     let task: Task | undefined = undefined;
     if (msg.taskId) {
       task = await this.taskStore.load(msg.taskId);
       if (!task) throw A2AError.taskNotFound(msg.taskId);
     }
 
-    // Set up event bus (uses contextId for pub/sub isolation)
     const contextId = msg.contextId || task?.contextId || uuidv4();
     this.eventBus.registerContext(contextId);
+    const eventQueue = new ExecutionEventQueue(this.eventBus, contextId);
 
-    // Kick off agent execution (this publishes all events/statuses to the bus)
+    // Kick off agent execution
     this.executor.execute(msg, this.eventBus, { task }).catch((err) => {
-      // On error, emit failed status to the event bus for the client to pick up
       const failedEvent: TaskStatusUpdateEvent = {
         kind: "status-update",
         taskId: task?.id || uuidv4(),
@@ -95,31 +96,38 @@ export class MomentoAgentRequestHandler {
       this.eventBus.publish(failedEvent);
     });
 
-    // Listen for the *final* result (blocking; production apps will often want a timeout)
-    return new Promise<Task>((resolve, reject) => {
-      const onEvent = (event: AgentExecutionEvent) => {
-        if (
-          (event.kind === "task" && ["completed", "failed", "canceled", "rejected"].includes(event.status.state)) ||
-          (event.kind === "status-update" && event.final && ["completed", "failed", "canceled", "rejected"].includes(event.status.state))
-        ) {
-          this.eventBus.unregisterContext(contextId);
 
-          if (event.kind === "task") {
-            resolve(event);
-          } else if (event.kind === "status-update") {
-            this.taskStore.load(event.taskId).then((task) => resolve(task!));
+
+    return await Promise.race([
+      (async () => {
+        let finalTask: Task | undefined = undefined;
+        try {
+          for await (const event of eventQueue.events()) {
+            await resultManager.processEvent(event);
+            if (
+              (event.kind === "task" && isFinal(event.status.state)) ||
+              (event.kind === "status-update" && event.final && isFinal(event.status.state))
+            ) {
+              finalTask = await this.taskStore.load(event.kind === "task" ? event.id : event.taskId);
+              break;
+            }
           }
+        } finally {
+          eventQueue.stop();
+          this.eventBus.unregisterContext(contextId);
         }
-      };
 
-      this.eventBus.onContext(contextId, onEvent);
-
-      // Optionally, add a timeout for production safety
-      setTimeout(() => {
-        this.eventBus.unregisterContext(contextId);
-        reject(A2AError.internalError("Timeout waiting for agent execution."));
-      }, 30_000);
-    });
+        if (!finalTask) throw new Error("No final task result");
+        return finalTask;
+      })(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          eventQueue.stop();
+          this.eventBus.unregisterContext(contextId);
+          reject(A2AError.internalError("Timeout waiting for agent execution."));
+        }, 30_000)
+      )
+    ]);
   }
 
   /** Streaming message interface (yields events as they happen) */
@@ -134,8 +142,13 @@ export class MomentoAgentRequestHandler {
       task = await this.taskStore.load(msg.taskId);
       if (!task) throw A2AError.taskNotFound(msg.taskId);
     }
+
+    const resultManager = new ResultManager(this.taskStore);
+    resultManager.setContext(msg);
+
     const contextId = msg.contextId || task?.contextId || uuidv4();
     this.eventBus.registerContext(contextId);
+    const eventQueue = new ExecutionEventQueue(this.eventBus, contextId);
 
     this.executor.execute(msg, this.eventBus, { task }).catch((err) => {
       const failedEvent: TaskStatusUpdateEvent = {
@@ -160,31 +173,19 @@ export class MomentoAgentRequestHandler {
       this.eventBus.publish(failedEvent);
     });
 
-    // Pipe all events to the generator
-    const queue: (AgentExecutionEvent)[] = [];
-    const onEvent = (event: AgentExecutionEvent) => {
-      queue.push(event);
-    };
-
-    this.eventBus.onContext(contextId, onEvent);
-
     try {
-      while (true) {
-        if (queue.length > 0) {
-          const event = queue.shift()!;
-          if (
-            event.kind === "task" ||
-            event.kind === "status-update" ||
-            event.kind === "artifact-update"
-          ) {
-            yield event;
-          }
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+      for await (const event of eventQueue.events()) {
+        await resultManager.processEvent(event);
+        if (
+          event.kind === "task" ||
+          event.kind === "status-update" ||
+          event.kind === "artifact-update"
+        ) {
+          yield event;
         }
       }
-
     } finally {
+      eventQueue.stop();
       this.eventBus.unregisterContext(contextId);
     }
   }
@@ -209,8 +210,7 @@ export class MomentoAgentRequestHandler {
     const task = await this.taskStore.load(params.id);
     if (!task) throw A2AError.taskNotFound(params.id);
 
-    const nonCancelable = ["completed", "failed", "canceled", "rejected"];
-    if (nonCancelable.includes(task.status.state)) {
+    if (isFinal(task.status.state)) {
       throw A2AError.taskNotCancelable(params.id);
     }
 
@@ -266,34 +266,30 @@ export class MomentoAgentRequestHandler {
 
     yield task;
 
-    // If task is final, don't stream anything else
-    if (["completed", "failed", "canceled", "rejected"].includes(task.status.state)) return;
+    // If task is already final, return immediately
+    if (isFinal(task.status.state)) return;
 
     const contextId = task.contextId;
-    this.eventBus.registerContext(contextId);
-
-    const queue: (Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent)[] = [];
-    const onEvent = (event: AgentExecutionEvent) => {
-      if (
-        (event.kind === "status-update" || event.kind === "artifact-update" || event.kind === "task") &&
-        ((event as any).taskId === params.id || (event as any).id === params.id)
-      ) {
-        queue.push(event);
-      }
-    };
-
-    this.eventBus.onContext(contextId, onEvent);
+    // Use ExecutionEventQueue for proper event handling
+    const eventQueue = new ExecutionEventQueue(this.eventBus, contextId);
 
     try {
-      while (true) {
-        if (queue.length > 0) {
-          yield queue.shift()!;
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+      for await (const event of eventQueue.events()) {
+        // Only yield relevant events for this task
+        if (
+          (event.kind === "status-update" || event.kind === "artifact-update" || event.kind === "task") &&
+          ((event as any).taskId === params.id || (event as any).id === params.id)
+        ) {
+          yield event;
         }
       }
     } finally {
+      eventQueue.stop();
       this.eventBus.unregisterContext(contextId);
     }
   }
+}
+
+function isFinal(state: string) {
+  return ["completed", "failed", "canceled", "rejected"].includes(state);
 }

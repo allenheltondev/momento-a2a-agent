@@ -19,6 +19,7 @@ export class ExecutionEventQueue {
   private boundHandleEvent: (event: AgentExecutionEvent) => void;
 
   private handleEvent(event: AgentExecutionEvent) {
+    if(this.stopped) return;
     if ('contextId' in event && event.contextId === this.contextId) {
       this.eventQueue.push(event);
       if (this.resolvePromise) {
@@ -34,7 +35,7 @@ export class ExecutionEventQueue {
    */
   public async *events(): AsyncGenerator<AgentExecutionEvent, void, undefined> {
     try {
-      while (!this.stopped || this.eventQueue.length > 0) {
+      while (!this.stopped) {
         if (this.eventQueue.length > 0) {
           const event = this.eventQueue.shift()!;
           yield event;
@@ -46,7 +47,7 @@ export class ExecutionEventQueue {
             this.stop();
             break;
           }
-        } else if (!this.stopped) {
+        } else {
           await new Promise<void>((resolve) => {
             this.resolvePromise = resolve;
           });

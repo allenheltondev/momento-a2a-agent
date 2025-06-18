@@ -4,6 +4,7 @@ import { MomentoAgentExecutor } from './agent/executor';
 import type { HandleTaskFn } from './agent/executor';
 import { AgentCard } from './types';
 
+export type { Task, Message } from './types'
 export interface CreateMomentoAgentOptions extends A2AServerOptions {
   defaultTtlSeconds?: number;
 }

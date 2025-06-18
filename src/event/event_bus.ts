@@ -27,6 +27,7 @@ interface PollState {
 export class MomentoEventBus extends EventEmitter implements IExecutionEventBus {
   private readonly client: MomentoClient;
   private readonly pollers = new Map<string, PollState>();
+  private readonly contextListeners = new Map<string, (e: AgentExecutionEvent) => void>();
 
   constructor(cacheName: string, apiKey: string) {
     super();
@@ -93,13 +94,21 @@ export class MomentoEventBus extends EventEmitter implements IExecutionEventBus 
   unregisterContext(contextId: string): void {
     this.pollers.get(contextId)?.ctrl.abort();
     this.pollers.delete(contextId);
+    // Remove the filtered event listener
+    const filteredListener = this.contextListeners.get(contextId);
+    if (filteredListener) {
+      this.off("event", filteredListener);
+      this.contextListeners.delete(contextId);
+    }
   }
 
   onContext(contextId: string, listener: (e: AgentExecutionEvent) => void): this {
     this.registerContext(contextId);
-    return this.on("event", (e) => {
+    const filteredListener = (e: AgentExecutionEvent) => {
       if (e.contextId === contextId) listener(e);
-    });
+    };
+    this.contextListeners.set(contextId, filteredListener);
+    return this.on("event", filteredListener);
   }
 
   override removeAllListeners(eventName?: "event"): this {

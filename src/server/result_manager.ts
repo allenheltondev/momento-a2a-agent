@@ -27,14 +27,10 @@ export class ResultManager {
    */
   public async processEvent(event: AgentExecutionEvent): Promise<void> {
     if (event.kind === "message") {
-      // Final result: message
       this.finalMessageResult = event as Message;
-      // ExecutionEventQueue will stop after a 'message' event.
     } else if (event.kind === "task") {
-      // Update current task with new task event
       this.currentTask = { ...event as Task };
 
-      // Ensure latest user message is present in history (prepend if not)
       if (this.latestUserMessage) {
         const alreadyExists = this.currentTask.history?.some(
           (msg) => msg.messageId === this.latestUserMessage!.messageId

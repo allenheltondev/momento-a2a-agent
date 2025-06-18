@@ -60,37 +60,42 @@ export class MomentoAgentExecutor {
 
     try {
       const handlerResult = await this.handleTask(message, { task });
-
       let resultTask: Task = { ...task };
-      let parts: any[] = [];
-      let artifacts: Artifact[] = [];
-      let metadata: Record<string, any> = {};
 
       if (typeof handlerResult === "string") {
-        parts = [{ kind: "text", text: handlerResult }];
-      } else if (isPartialTask(handlerResult)) {
-        resultTask = { ...resultTask, ...handlerResult };
+        resultTask.status = {
+          ...resultTask.status,
+          state: "completed",
+          message: {
+            ...message,
+            parts: [{ kind: "text", text: handlerResult }],
+          },
+          timestamp: new Date().toISOString(),
+        };
       } else if (isPartsResult(handlerResult)) {
-        parts = handlerResult.parts ?? [];
-        artifacts = handlerResult.artifacts ?? [];
-        metadata = handlerResult.metadata ?? {};
-
-        if (parts.length) {
-          resultTask.status = {
-            ...resultTask.status,
-            message: {
-              ...message,
-              parts,
-            },
-            state: "completed",
-            timestamp: new Date().toISOString(),
-          };
+        resultTask.status = {
+          ...resultTask.status,
+          state: "completed",
+          message: {
+            ...message,
+            parts: handlerResult.parts ?? [],
+          },
+          timestamp: new Date().toISOString(),
+        };
+        if (handlerResult.artifacts?.length) {
+          resultTask.artifacts = [...(resultTask.artifacts ?? []), ...handlerResult.artifacts];
         }
-        if (artifacts.length) {
-          resultTask.artifacts = [...(resultTask.artifacts ?? []), ...artifacts];
+        if (handlerResult.metadata) {
+          resultTask.metadata = { ...(resultTask.metadata ?? {}), ...handlerResult.metadata };
         }
-        if (Object.keys(metadata).length > 0) {
-          resultTask.metadata = { ...(resultTask.metadata ?? {}), ...metadata };
+      } else if (isPartialTask(handlerResult)) {
+        // Deep merge: require status.message and state, do NOT overwrite in subsequent code
+        resultTask = { ...resultTask, ...handlerResult };
+        if (
+          !resultTask.status?.message ||
+          !resultTask.status?.state
+        ) {
+          throw new Error("If returning a Task, you must provide at least status.message and status.state");
         }
       }
 
@@ -108,7 +113,7 @@ export class MomentoAgentExecutor {
         taskId: resultTask.id,
         contextId: resultTask.contextId,
         status: {
-          state: "completed",
+          state: resultTask.status.state,
           message: resultTask.status.message!,
           timestamp: resultTask.status.timestamp ?? new Date().toISOString(),
         },
@@ -174,7 +179,7 @@ function initializeTask({ base, message, agentName, agentId, }: { base?: Task; m
   };
 }
 
-function isPartsResult(val: any): val is { parts?: any[], artifacts?: any[], metadata?: any } {
+function isPartsResult(val: any): val is { parts?: any[], artifacts?: any[], metadata?: any; } {
   if (!val || typeof val !== "object") return false;
   if ("kind" in val && val.kind === "task") return false;
   return (

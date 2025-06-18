@@ -38,7 +38,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           npm version minor --no-git-tag-version
 
-      e: Commit and push version bump
+      - name: Commit and push version bump
         run: |
           git add package.json package-lock.json
           git commit -m "ci: bump version [skip ci]" || echo "No changes to commit"

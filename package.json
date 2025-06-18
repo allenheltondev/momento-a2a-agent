@@ -1,0 +1,22 @@
+{
+  "name": "momento-a2a-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/events": "^3.0.3",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "hono": "^4.7.11",
+    "uuid": "^11.1.0"
+  }
+}

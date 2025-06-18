@@ -1,0 +1,299 @@
+import { v4 as uuidv4 } from "uuid";
+import {
+  AgentCard,
+  Message,
+  Task,
+  TaskState,
+  TaskStatusUpdateEvent,
+  TaskArtifactUpdateEvent,
+  MessageSendParams,
+  TaskQueryParams,
+  TaskIdParams,
+  PushNotificationConfig,
+  TaskPushNotificationConfig,
+} from "../types";
+import { MomentoTaskStore, TaskStore } from "../store/task_store";
+import { MomentoClient } from "../momento/client";
+import { AgentExecutionEvent, MomentoEventBus } from "../event/event_bus";
+import { MomentoAgentExecutor } from "../agent/executor";
+import { A2AError } from "../server/error";
+
+const PREFIX = {
+  PushConfig: "push-config:",
+  Cancelled: "cancelled-task:",
+};
+
+export interface MomentoAgentRequestHandlerOptions {
+  momentoApiKey: string;
+  cacheName: string;
+  defaultTtlSeconds?: number;
+  agentCard: AgentCard;
+  executor: MomentoAgentExecutor;
+}
+
+export class MomentoAgentRequestHandler {
+  private readonly agentCard: AgentCard;
+  private readonly taskStore: TaskStore;
+  private readonly client: MomentoClient;
+  private readonly eventBus: MomentoEventBus;
+  private readonly executor: MomentoAgentExecutor;
+
+  constructor(opts: MomentoAgentRequestHandlerOptions) {
+    this.agentCard = opts.agentCard;
+    this.taskStore = new MomentoTaskStore(opts.cacheName, opts.momentoApiKey);
+    this.client = new MomentoClient({
+      apiKey: opts.momentoApiKey,
+      cacheName: opts.cacheName,
+      defaultTtlSeconds: opts.defaultTtlSeconds ?? 300,
+    });
+    this.eventBus = new MomentoEventBus(opts.cacheName, opts.momentoApiKey);
+    this.executor = opts.executor;
+  }
+
+  async getAgentCard(): Promise<AgentCard> {
+    return this.agentCard;
+  }
+
+  /** Send a message, returning the final Task result (or Message, per protocol) */
+  async sendMessage(params: MessageSendParams): Promise<Task> {
+    const msg = params.message;
+    if (!msg.messageId) throw A2AError.invalidParams("message.messageId is required.");
+
+    // Check for existing task
+    let task: Task | undefined = undefined;
+    if (msg.taskId) {
+      task = await this.taskStore.load(msg.taskId);
+      if (!task) throw A2AError.taskNotFound(msg.taskId);
+    }
+
+    // Set up event bus (uses contextId for pub/sub isolation)
+    const contextId = msg.contextId || task?.contextId || uuidv4();
+    this.eventBus.registerContext(contextId);
+
+    // Kick off agent execution (this publishes all events/statuses to the bus)
+    this.executor.execute(msg, this.eventBus, { task }).catch((err) => {
+      // On error, emit failed status to the event bus for the client to pick up
+      const failedEvent: TaskStatusUpdateEvent = {
+        kind: "status-update",
+        taskId: task?.id || uuidv4(),
+        contextId,
+        status: {
+          state: "failed",
+          message: {
+            ...msg,
+            parts: [
+              {
+                kind: "text",
+                text: `Agent execution failed: ${err.message ?? err}`,
+              },
+            ],
+          },
+          timestamp: new Date().toISOString(),
+        },
+        final: true,
+      };
+      this.eventBus.publish(failedEvent);
+    });
+
+    // Listen for the *final* result (blocking; production apps will often want a timeout)
+    return new Promise<Task>((resolve, reject) => {
+      const onEvent = (event: AgentExecutionEvent) => {
+        if (
+          (event.kind === "task" && ["completed", "failed", "canceled", "rejected"].includes(event.status.state)) ||
+          (event.kind === "status-update" && event.final && ["completed", "failed", "canceled", "rejected"].includes(event.status.state))
+        ) {
+          this.eventBus.unregisterContext(contextId);
+
+          if (event.kind === "task") {
+            resolve(event);
+          } else if (event.kind === "status-update") {
+            this.taskStore.load(event.taskId).then((task) => resolve(task!));
+          }
+        }
+      };
+
+      this.eventBus.onContext(contextId, onEvent);
+
+      // Optionally, add a timeout for production safety
+      setTimeout(() => {
+        this.eventBus.unregisterContext(contextId);
+        reject(A2AError.internalError("Timeout waiting for agent execution."));
+      }, 30_000);
+    });
+  }
+
+  /** Streaming message interface (yields events as they happen) */
+  async *sendMessageStream(
+    params: MessageSendParams,
+  ): AsyncGenerator<Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent, void, undefined> {
+    const msg = params.message;
+    if (!msg.messageId) throw A2AError.invalidParams("message.messageId is required.");
+
+    let task: Task | undefined = undefined;
+    if (msg.taskId) {
+      task = await this.taskStore.load(msg.taskId);
+      if (!task) throw A2AError.taskNotFound(msg.taskId);
+    }
+    const contextId = msg.contextId || task?.contextId || uuidv4();
+    this.eventBus.registerContext(contextId);
+
+    this.executor.execute(msg, this.eventBus, { task }).catch((err) => {
+      const failedEvent: TaskStatusUpdateEvent = {
+        kind: "status-update",
+        taskId: task?.id || uuidv4(),
+        contextId,
+        status: {
+          state: "failed",
+          message: {
+            ...msg,
+            parts: [
+              {
+                kind: "text",
+                text: `Agent execution failed: ${err.message ?? err}`,
+              },
+            ],
+          },
+          timestamp: new Date().toISOString(),
+        },
+        final: true,
+      };
+      this.eventBus.publish(failedEvent);
+    });
+
+    // Pipe all events to the generator
+    const queue: (AgentExecutionEvent)[] = [];
+    const onEvent = (event: AgentExecutionEvent) => {
+      queue.push(event);
+    };
+
+    this.eventBus.onContext(contextId, onEvent);
+
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          const event = queue.shift()!;
+          if (
+            event.kind === "task" ||
+            event.kind === "status-update" ||
+            event.kind === "artifact-update"
+          ) {
+            yield event;
+          }
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+
+    } finally {
+      this.eventBus.unregisterContext(contextId);
+    }
+  }
+
+  /** Get a task by ID */
+  async getTask(params: TaskQueryParams): Promise<Task> {
+    const task = await this.taskStore.load(params.id);
+    if (!task) throw A2AError.taskNotFound(params.id);
+    // Optionally slice history if needed
+    if (
+      typeof params.historyLength === "number" &&
+      params.historyLength >= 0 &&
+      Array.isArray((task as any).history)
+    ) {
+      (task as any).history = (task as any).history.slice(-params.historyLength);
+    }
+    return task;
+  }
+
+  /** Cancel a task by ID */
+  async cancelTask(params: TaskIdParams): Promise<Task> {
+    const task = await this.taskStore.load(params.id);
+    if (!task) throw A2AError.taskNotFound(params.id);
+
+    const nonCancelable = ["completed", "failed", "canceled", "rejected"];
+    if (nonCancelable.includes(task.status.state)) {
+      throw A2AError.taskNotCancelable(params.id);
+    }
+
+    // Mark task as canceled (or use pub/sub if you want live updates)
+    task.status = {
+      state: "canceled",
+      message: {
+        kind: "message",
+        role: "agent",
+        messageId: uuidv4(),
+        parts: [{ kind: "text", text: "Task cancellation requested by user." }],
+        taskId: task.id,
+        contextId: task.contextId,
+      },
+      timestamp: new Date().toISOString(),
+    };
+    await this.taskStore.save(task);
+
+    // Emit to pub/sub for live update listeners
+    await this.eventBus.publish({
+      kind: "status-update",
+      taskId: task.id,
+      contextId: task.contextId,
+      status: task.status,
+      final: true,
+    });
+    return task;
+  }
+
+  /** Set push notification config (if agent supports it) */
+  async setTaskPushNotificationConfig(params: TaskPushNotificationConfig): Promise<TaskPushNotificationConfig> {
+    if (!this.agentCard.capabilities.pushNotifications) throw A2AError.pushNotificationNotSupported();
+    const task = await this.taskStore.load(params.taskId);
+    if (!task) throw A2AError.taskNotFound(params.taskId);
+    await this.client.set(PREFIX.PushConfig + params.taskId, params.pushNotificationConfig);
+    return params;
+  }
+
+  /** Get push notification config (if agent supports it) */
+  async getTaskPushNotificationConfig(params: TaskIdParams): Promise<TaskPushNotificationConfig> {
+    if (!this.agentCard.capabilities.pushNotifications) throw A2AError.pushNotificationNotSupported();
+    const task = await this.taskStore.load(params.id);
+    if (!task) throw A2AError.taskNotFound(params.id);
+    const config = await this.client.get<PushNotificationConfig>(PREFIX.PushConfig + params.id, { format: "json" });
+    if (!config) throw A2AError.internalError(`Push notification config not found for task ${params.id}.`);
+    return { taskId: params.id, pushNotificationConfig: config };
+  }
+
+  /** Resubscribe to an existing task's event stream */
+  async *resubscribe(params: TaskIdParams): AsyncGenerator<Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent, void, undefined> {
+    const task = await this.taskStore.load(params.id);
+    if (!task) throw A2AError.taskNotFound(params.id);
+
+    yield task;
+
+    // If task is final, don't stream anything else
+    if (["completed", "failed", "canceled", "rejected"].includes(task.status.state)) return;
+
+    const contextId = task.contextId;
+    this.eventBus.registerContext(contextId);
+
+    const queue: (Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent)[] = [];
+    const onEvent = (event: AgentExecutionEvent) => {
+      if (
+        (event.kind === "status-update" || event.kind === "artifact-update" || event.kind === "task") &&
+        ((event as any).taskId === params.id || (event as any).id === params.id)
+      ) {
+        queue.push(event);
+      }
+    };
+
+    this.eventBus.onContext(contextId, onEvent);
+
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          yield queue.shift()!;
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+    } finally {
+      this.eventBus.unregisterContext(contextId);
+    }
+  }
+}

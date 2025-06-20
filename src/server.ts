@@ -25,7 +25,7 @@ export class A2AServer {
   constructor(requestHandler: MomentoAgentRequestHandler, options?: A2AServerOptions) {
     this.requestHandler = requestHandler;
     this.transportHandler = new JsonRpcTransportHandler(requestHandler);
-    this.basePath = options?.basePath ?? "/";
+    this.basePath = (options?.basePath ?? "/").replace(/\/?$/, "/");
     this.cors = options?.enableCors ?? false;
   }
 
@@ -54,8 +54,8 @@ export class A2AServer {
     }
 
     // ---- Well-known endpoint for agent card ----
-    app.options("/.well-known/agent.json", (c) => c.body(null, 204));
-    app.get("/.well-known/agent.json", async (c: Context) => {
+    app.options(this.basePath + ".well-known/agent.json", (c) => c.body(null, 204));
+    app.get(this.basePath + ".well-known/agent.json", async (c: Context) => {
       const agentCard = await this.requestHandler.getAgentCard();
       return c.json(agentCard);
     });

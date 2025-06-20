@@ -5,7 +5,7 @@ import type { HandleTaskFn } from './agent/executor';
 import { AgentCard } from './types';
 import { register } from './momento/agent_registry';
 
-export type { Task, Message } from './types'
+export type { Task, Message, AgentSkill, AgentCard } from './types'
 export interface CreateMomentoAgentOptions extends A2AServerOptions {
   defaultTtlSeconds?: number;
   registerAgent?: boolean;

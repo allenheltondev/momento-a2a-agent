@@ -19,6 +19,9 @@
     "prepare": "npm run build",
     "prepublishOnly": "npm run build && npm test"
   },
+  "bin": {
+    "mcp": "./dist/client/mcp.js"
+  },
   "keywords": [
     "momento",
     "a2a",
@@ -39,14 +42,15 @@
   },
   "devDependencies": {
     "@types/events": "^3.0.3",
-    "@types/node": "^24.0.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
     "hono": "^4.7.11",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "zod": "^3.25.67"
   },
   "files": [
     "dist",

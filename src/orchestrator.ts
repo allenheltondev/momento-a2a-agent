@@ -45,7 +45,7 @@ export class OpenAIOrchestrator {
     }
     const mcpServer = new MCPServerStdio({
       name: 'A2A Client MCP server via npx',
-      fullCommand: 'npx -y @momento-a2a-agent'
+      fullCommand: 'npx -y momento-a2a-agent'
     });
     await mcpServer.connect();
 

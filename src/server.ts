@@ -61,7 +61,7 @@ export class A2AServer {
     });
 
     // ---- JSON-RPC endpoint ----
-    app.post(this.basePath, async (c: Context) => {
+    app.post(this.basePath === '/' ? '/' : this.basePath.replace(/\/$/, ''), async (c: Context) => {
       let request: A2ARequest | undefined;
 
       try {

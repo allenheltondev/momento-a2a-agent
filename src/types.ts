@@ -2097,3 +2097,9 @@ export interface TaskStatus2 {
    */
   timestamp?: string;
 }
+
+export type AgentSummary = {
+  name: string,
+  description: string;
+  url: string;
+};

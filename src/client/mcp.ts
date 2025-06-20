@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { A2AClient } from "./client.js";
 import { v4 as uuidv4 } from 'uuid';
+import { TextPart } from "../types.js";
 
 const mcpServer = new McpServer({
   name: "A2A Tools",
@@ -15,13 +16,13 @@ const mcpServer = new McpServer({
 });
 
 mcpServer.tool(
-  "sendMessage",
-  "Communicate with an A2A server",
+  "invokeAgent",
+  "Send a message to an A2A server as part of a task.",
   {
-    agentUrl: z.string().url(),
-    message: z.string(),
-    taskId: z.string().optional(),
-    contextId: z.string().optional()
+    agentUrl: z.string().url().describe('Base url of the agent to invoke'),
+    message: z.string().describe('Specific instruction to pass to the agent'),
+    taskId: z.string().optional().describe('Unique identifier for a specific unit of work'),
+    contextId: z.string().optional().describe('Unique identifier for a set of related tasks')
   },
   async ({ agentUrl, message, contextId, taskId }) => {
     const client = new A2AClient(agentUrl);
@@ -45,7 +46,7 @@ mcpServer.tool(
         event.final === true &&
         event.status?.message?.parts?.length
       ) {
-        const textPart = event.status.message.parts.find((p) => p.kind === "text");
+        const textPart = event.status.message.parts.find((p) => p.kind === "text") as TextPart;
         if (textPart?.text) {
           finalText = textPart.text;
           finalSeen = true;

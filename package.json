@@ -20,7 +20,7 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "bin": {
-    "mcp": "./dist/client/mcp.js"
+    "momento-a2a-agent": "./dist/client/mcp.js"
   },
   "keywords": [
     "momento",
@@ -48,6 +48,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
+    "@openai/agents": "^0.0.9",
     "hono": "^4.7.11",
     "uuid": "^11.1.0",
     "zod": "^3.25.67"

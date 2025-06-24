@@ -3,6 +3,7 @@ import { MomentoClient } from '../momento/client.js';
 import { AGENT_LIST } from '../momento/agent_registry.js';
 import { AgentCard, AgentSummary } from '../types.js';
 
+const DEFAULT_CONCURRENCY_LIMIT = 3;
 export type OpenAiOrchestratorParams = {
   momento: {
     apiKey: string,
@@ -12,6 +13,7 @@ export type OpenAiOrchestratorParams = {
     apiKey: string,
     model?: string;
   };
+  agentLoadingConcurrency?: number
 };
 
 export type SendMessageParams = {
@@ -23,6 +25,7 @@ export class OpenAIOrchestrator {
   private client: MomentoClient;
   private model: string;
   private agentUrls: string[] = [];
+  private concurrencyLimit: number;
 
   constructor(params: OpenAiOrchestratorParams) {
     this.client = new MomentoClient({
@@ -32,6 +35,7 @@ export class OpenAIOrchestrator {
 
     setDefaultOpenAIKey(params.openai.apiKey);
     this.model = params.openai.model || 'o4-mini';
+    this.concurrencyLimit = params.agentLoadingConcurrency || DEFAULT_CONCURRENCY_LIMIT;
   }
 
   registerAgents(agentUrls: string[]) {
@@ -116,10 +120,14 @@ You are precise, efficient, and fully capable of autonomous planning and agent c
 
   private async loadAgents(): Promise<AgentCard[]> {
     const registeredAgents = await this.client.get<AgentSummary[]>(AGENT_LIST, { format: 'json' }) ?? [];
-    console.log(registeredAgents)
     const allAgents = [...new Set([...this.agentUrls ?? [], ...registeredAgents.filter((ra) => ra.url).map((ra) => ra.url)])];
-    const agentCards = await Promise.all(allAgents.map(async (url) => await this.loadAgentCard(url)));
-    return agentCards;
+    const results: AgentCard[] = [];
+    for (let i = 0; i < allAgents.length; i += this.concurrencyLimit) {
+    const chunk = allAgents.slice(i, i + this.concurrencyLimit);
+    const chunkResults = await Promise.all(chunk.map((url) => this.loadAgentCard(url)));
+    results.push(...chunkResults);
+  }
+    return results;
   }
 
   private async loadAgentCard(url: string): Promise<AgentCard> {
@@ -127,6 +135,8 @@ You are precise, efficient, and fully capable of autonomous planning and agent c
     if (!card) {
       const response = await fetch(`${url}/.well-known/agent.json`);
       if (!response.ok) {
+        const body = await response.text();
+        console.error(response.status, body);
         throw new Error(`Failed to load agent card from ${url}`);
       }
 

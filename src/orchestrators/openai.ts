@@ -25,6 +25,7 @@ export type SendMessageParams = {
 const invokeAgentTool = tool({
   name: invokeAgent.name,
   description: invokeAgent.description,
+  strict: true,
   parameters: invokeAgent.jsonSchema,
   execute: invokeAgent.handler
 });

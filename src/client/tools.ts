@@ -32,7 +32,8 @@ export const invokeAgent: any = {
         description: 'Unique identifier for a set of related tasks'
       }
     },
-    required: ['agentUrl', 'message']
+    required: ['agentUrl', 'message'],
+    additionalProperties: false
   },
   handler: async ({ agentUrl, message, contextId, taskId }: z.infer<typeof invokeAgent.schema>) => {
     const client = new A2AClient(agentUrl);

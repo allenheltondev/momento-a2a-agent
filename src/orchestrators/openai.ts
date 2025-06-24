@@ -1,7 +1,8 @@
-import { Agent, run, setDefaultOpenAIKey, MCPServerStdio } from '@openai/agents';
+import { Agent, run, setDefaultOpenAIKey, tool } from '@openai/agents';
 import { MomentoClient } from '../momento/client.js';
 import { AGENT_LIST } from '../momento/agent_registry.js';
 import { AgentCard, AgentSummary } from '../types.js';
+import { invokeAgent } from '../client/tools.js';
 
 const DEFAULT_CONCURRENCY_LIMIT = 3;
 export type OpenAiOrchestratorParams = {
@@ -13,13 +14,20 @@ export type OpenAiOrchestratorParams = {
     apiKey: string,
     model?: string;
   };
-  agentLoadingConcurrency?: number
+  agentLoadingConcurrency?: number;
 };
 
 export type SendMessageParams = {
   message: string,
   contextId?: string;
 };
+
+const invokeAgentTool = tool({
+  name: invokeAgent.name,
+  description: invokeAgent.description,
+  parameters: invokeAgent.schema,
+  execute: invokeAgent.handler
+});
 
 export class OpenAIOrchestrator {
   private client: MomentoClient;
@@ -47,17 +55,12 @@ export class OpenAIOrchestrator {
     if (agentCards.length === 0) {
       throw new Error('No agents were provided.');
     }
-    const mcpServer = new MCPServerStdio({
-      name: 'A2A Client MCP server via npx',
-      fullCommand: 'npx -y momento-a2a-agent'
-    });
-    await mcpServer.connect();
-    try {
-      const agent = new Agent({
-        model: this.model,
-        name: 'A2A Orchestrator',
-        mcpServers: [mcpServer],
-        instructions: `You are an autonomous orchestration agent with full authority to satisfy user requests by delegating to available specialized agents.
+
+    const agent = new Agent({
+      model: this.model,
+      name: 'A2A Orchestrator',
+      tools: [invokeAgentTool],
+      instructions: `You are an autonomous orchestration agent with full authority to satisfy user requests by delegating to available specialized agents.
 
 You are given:
 - A block of A2A agent cards describing each agent's capabilities.
@@ -107,15 +110,10 @@ ${params.contextId ? `Provide context id "${params.contextId}" to the invokeAgen
 ---
 You are precise, efficient, and fully capable of autonomous planning and agent coordination. When all your steps are completed, return a consolidated, meaningful answer as a response. If you can answer the user query yourself without calling tools, please do so.
 `
-      });
+    });
 
-      const response = await run(agent, params.message, { stream: false });
-      return response.finalOutput;
-    } finally {
-      if (mcpServer?.close) {
-        await mcpServer.close()?.catch(() => console.error('Could not disconnect MCP server'));
-      }
-    }
+    const response = await run(agent, params.message, { stream: false });
+    return response.finalOutput;
   }
 
   private async loadAgents(): Promise<AgentCard[]> {
@@ -123,10 +121,10 @@ You are precise, efficient, and fully capable of autonomous planning and agent c
     const allAgents = [...new Set([...this.agentUrls ?? [], ...registeredAgents.filter((ra) => ra.url).map((ra) => ra.url)])];
     const results: AgentCard[] = [];
     for (let i = 0; i < allAgents.length; i += this.concurrencyLimit) {
-    const chunk = allAgents.slice(i, i + this.concurrencyLimit);
-    const chunkResults = await Promise.all(chunk.map((url) => this.loadAgentCard(url)));
-    results.push(...chunkResults);
-  }
+      const chunk = allAgents.slice(i, i + this.concurrencyLimit);
+      const chunkResults = await Promise.all(chunk.map((url) => this.loadAgentCard(url)));
+      results.push(...chunkResults);
+    }
     return results;
   }
 

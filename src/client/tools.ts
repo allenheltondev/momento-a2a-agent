@@ -9,32 +9,9 @@ export const invokeAgent: any = {
   schema: z.object({
     agentUrl: z.string().describe('Base url of the agent to invoke'),
     message: z.string().describe('Specific instruction to pass to the agent'),
-    taskId: z.string().optional().nullable().describe('Unique identifier for a specific unit of work'),
-    contextId: z.string().optional().nullable().describe('Unique identifier for a set of related tasks')
+    taskId: z.string().default('').describe('Unique identifier for a specific user request. Provide blank for first call and use the returned ID for subsequent.'),
+    contextId: z.string().describe('Unique identifier for a set of related tasks')
   }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      agentUrl: {
-        type: 'string',
-        description: 'Base url of the agent to invoke'
-      },
-      message: {
-        type: 'string',
-        description: 'Specific instruction to pass to the agent'
-      },
-      taskId: {
-        type: 'string',
-        description: 'Unique identifier for a specific unit of work'
-      },
-      contextId: {
-        type: 'string',
-        description: 'Unique identifier for a set of related tasks'
-      }
-    },
-    required: ['agentUrl', 'message'],
-    additionalProperties: false
-  },
   handler: async ({ agentUrl, message, contextId, taskId }: z.infer<typeof invokeAgent.schema>) => {
     const client = new A2AClient(agentUrl);
     const stream = await client.sendMessageStream({
@@ -43,8 +20,8 @@ export const invokeAgent: any = {
         kind: 'message',
         parts: [{ kind: 'text', text: message }],
         role: 'user',
-        ...contextId && { contextId },
-        ...taskId && { taskId }
+        ...(contextId && { contextId }),
+        ...(taskId && taskId !== '' && { taskId })
       }
     });
 

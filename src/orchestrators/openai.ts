@@ -26,7 +26,7 @@ const invokeAgentTool = tool({
   name: invokeAgent.name,
   description: invokeAgent.description,
   strict: true,
-  parameters: invokeAgent.jsonSchema,
+  parameters: invokeAgent.schema,
   execute: invokeAgent.handler
 });
 

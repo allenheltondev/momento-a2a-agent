@@ -7,7 +7,7 @@ export const invokeAgent: any = {
   name: 'invokeAgent',
   description: "Send a message to an A2A server as part of a task.",
   schema: z.object({
-    agentUrl: z.string().url().describe('Base url of the agent to invoke'),
+    agentUrl: z.string().describe('Base url of the agent to invoke'),
     message: z.string().describe('Specific instruction to pass to the agent'),
     taskId: z.string().optional().nullable().describe('Unique identifier for a specific unit of work'),
     contextId: z.string().optional().nullable().describe('Unique identifier for a set of related tasks')

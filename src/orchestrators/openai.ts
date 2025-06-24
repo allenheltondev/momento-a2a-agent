@@ -1,7 +1,7 @@
 import { Agent, run, setDefaultOpenAIKey, MCPServerStdio } from '@openai/agents';
-import { MomentoClient } from './momento/client.js';
-import { AGENT_LIST } from './momento/agent_registry.js';
-import { AgentCard, AgentSummary } from './types.js';
+import { MomentoClient } from '../momento/client.js';
+import { AGENT_LIST } from '../momento/agent_registry.js';
+import { AgentCard, AgentSummary } from '../types.js';
 
 export type OpenAiOrchestratorParams = {
   momento: {
@@ -40,7 +40,7 @@ export class OpenAIOrchestrator {
 
   async sendMessage(params: SendMessageParams): Promise<string | undefined> {
     const agentCards = await this.loadAgents();
-    if(agentCards.length === 0){
+    if (agentCards.length === 0) {
       throw new Error('No agents were provided.');
     }
     const mcpServer = new MCPServerStdio({
@@ -48,12 +48,12 @@ export class OpenAIOrchestrator {
       fullCommand: 'npx -y momento-a2a-agent'
     });
     await mcpServer.connect();
-
-    const agent = new Agent({
-      model: this.model,
-      name: 'A2A Orchestrator',
-      mcpServers: [mcpServer],
-      instructions: `You are an autonomous orchestration agent with full authority to satisfy user requests by delegating to available specialized agents.
+    try {
+      const agent = new Agent({
+        model: this.model,
+        name: 'A2A Orchestrator',
+        mcpServers: [mcpServer],
+        instructions: `You are an autonomous orchestration agent with full authority to satisfy user requests by delegating to available specialized agents.
 
 You are given:
 - A block of A2A agent cards describing each agent's capabilities.
@@ -71,7 +71,7 @@ Your responsibilities:
 
 About the 'invokeAgent' tool:
 - It sends a task to a specific agent.
-- You must specify: 'agentName', 'message', 'contextId' and optionally 'taskId'.
+- You must specify: 'agentUrl', 'message', 'contextId' and optionally 'taskId'.
 - You will receive a final message from the agent.
 
 Use 'invokeAgent' whenever you need to delegate a task.
@@ -81,7 +81,7 @@ EXAMPLES OF DELEGATION
 
 **Simple request:**
 User: "What's the weather in Rome tomorrow?"
-→ Use 'invokeAgent' with 'agentName = "WeatherAgent"' and task = "Get the weather forecast for Rome tomorrow."
+→ Use 'invokeAgent' with 'agentUrl' = "https://agent.workers.dev/weather"' and task = "Get the weather forecast for Rome tomorrow."
 
 **Multi-step:**
 User: "Find me a place to stay in Seattle this weekend and tell me if it will be sunny."
@@ -98,19 +98,25 @@ ${agentCards.map((card) => this.agentCardToPromptFormat(card)).join('\n\n')}
 OTHER CONTEXT
 
 It is currently ${new Date().toISOString()}.
-${params.contextId ? `The context ID is ${params.contextId}.` : 'No context ID was provided.'}
+${params.contextId ? `Provide context id "${params.contextId}" to the invokeAgent tool when making a call.` : ''}
 
 ---
-You are precise, efficient, and fully capable of autonomous planning and agent coordination. When all your steps are completed, return a consolidated, meaningful answer as a response.
+You are precise, efficient, and fully capable of autonomous planning and agent coordination. When all your steps are completed, return a consolidated, meaningful answer as a response. If you can answer the user query yourself without calling tools, please do so.
 `
-    });
+      });
 
-    const response = await run(agent, params.message);
-    return response.finalOutput;
+      const response = await run(agent, params.message, { stream: false });
+      return response.finalOutput;
+    } finally {
+      if (mcpServer?.close) {
+        await mcpServer.close()?.catch(() => console.error('Could not disconnect MCP server'));
+      }
+    }
   }
 
   private async loadAgents(): Promise<AgentCard[]> {
     const registeredAgents = await this.client.get<AgentSummary[]>(AGENT_LIST, { format: 'json' }) ?? [];
+    console.log(registeredAgents)
     const allAgents = [...new Set([...this.agentUrls ?? [], ...registeredAgents.filter((ra) => ra.url).map((ra) => ra.url)])];
     const agentCards = await Promise.all(allAgents.map(async (url) => await this.loadAgentCard(url)));
     return agentCards;
@@ -133,6 +139,7 @@ You are precise, efficient, and fully capable of autonomous planning and agent c
   private agentCardToPromptFormat(card: AgentCard): string {
     return `Agent: ${card.name}
     Description: ${card.description}
+    Url: ${card.url}
     Skills:
     ${card.skills.map((skill) => `- ${skill.name}: ${skill.description}
        Examples:

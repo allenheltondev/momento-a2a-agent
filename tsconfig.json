@@ -13,7 +13,7 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "rootDir": "./src",
-    "types": [],
+    "types": ["vitest/globals"],
     "resolveJsonModule": true
   },
   "include": ["src"],

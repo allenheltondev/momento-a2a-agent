@@ -3,7 +3,8 @@
 
 A production-ready TypeScript package for building stateless [A2A agents](https://google-a2a.github.io/A2A/latest/) on Cloudflare Workers, AWS Lambda, or anywhere JavaScript runs. This package enhances the capabilities of the A2A protocol using [Momento](https://gomomento.com/) for zero-infrastructure *global state, streaming, and agent discovery*.
 
-[![NPM](https://img.shields.io/npm/v/momento-a2a-agent)](https://www.npmjs.com/package/momento-a2a-agent)
+[![NPM](https://img.shields.io/npm/v/momento-a2a-agent)](https://www.npmjs.com/package/momento-a2a-agent) ![Unit Tests](https://github.com/allenheltondev/momento-a2a-agent/actions/workflows/ci.yml/badge.svg)
+
 
 ## In this package
 

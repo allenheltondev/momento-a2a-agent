@@ -12,6 +12,28 @@ export const invokeAgent: any = {
     taskId: z.string().optional().nullable().describe('Unique identifier for a specific unit of work'),
     contextId: z.string().optional().nullable().describe('Unique identifier for a set of related tasks')
   }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      agentUrl: {
+        type: 'string',
+        description: 'Base url of the agent to invoke'
+      },
+      message: {
+        type: 'string',
+        description: 'Specific instruction to pass to the agent'
+      },
+      taskId: {
+        type: 'string',
+        description: 'Unique identifier for a specific unit of work'
+      },
+      contextId: {
+        type: 'string',
+        description: 'Unique identifier for a set of related tasks'
+      }
+    },
+    required: ['agentUrl', 'message']
+  },
   handler: async ({ agentUrl, message, contextId, taskId }: z.infer<typeof invokeAgent.schema>) => {
     const client = new A2AClient(agentUrl);
     const stream = await client.sendMessageStream({

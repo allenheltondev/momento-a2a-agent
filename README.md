@@ -5,6 +5,11 @@ A production-ready TypeScript package for building stateless [A2A agents](https:
 
 [![NPM](https://img.shields.io/npm/v/momento-a2a-agent)](https://www.npmjs.com/package/momento-a2a-agent) ![Unit Tests](https://github.com/allenheltondev/momento-a2a-agent/actions/workflows/ci.yml/badge.svg)
 
+## Installation
+
+```bash
+npm install momento-a2a-agent
+```
 
 ## In this package
 
@@ -35,7 +40,11 @@ This approach unlocks true cloud-native A2A agents that are elastic, observable,
 
 To use this to build an agent, you must create a [Momento API key](https://console.gomomento.com/api-keys) with **super user permissions**. You will also need to create a cache in your Momento account. That's it! The rest is handled for you via the package.
 
-## Example: Minimal Cloudflare Worker
+## A2A Servers
+
+The brains of the operation, A2A servers are what handles the processing of tasks. Below is how to build a server and what properties you need to do it.
+
+### Example: Minimal Cloudflare Worker
 
 ```ts
 import { createMomentoAgent } from "momento-a2a-agent";
@@ -70,8 +79,7 @@ export default {
 
 ```
 
-
-## Example: Advanced Worker with Claude and MCP server
+### Example: Advanced Worker with Claude and MCP server
 
 ```ts
 import { createMomentoAgent } from "momento-a2a-agent";
@@ -121,7 +129,13 @@ async function createAgent(){
   agent = await createMomentoAgent({
     cacheName: "ai",
     apiKey: momentoApiKey,
-    skills: [{ name: "Custom MCP work", description: "Asks an LLM to do something related to an MCP server", examples: ["Do that thing with my stuff"]}],
+    skills: [{
+      id: 'mcp'
+      name: "Custom MCP work",
+      description: "Asks an LLM to do something related to an MCP server",
+      examples: ["Do that thing with my stuff"],
+      tags: ['mcp']
+    }],
     handler,
     agentCard: {
       name: "MCPBot",
@@ -148,7 +162,7 @@ export default {
 
 ```
 
-### `createMomentoAgent` fields
+#### `createMomentoAgent` fields
 
 | Parameter   | Type                                                       | Required | Description                                                                 | Default   |
 | ----------- | ---------------------------------------------------------- | -------- | --------------------------------------------------------------------------- | --------- |
@@ -159,7 +173,7 @@ export default {
 | `agentCard` | `Partial<AgentCard>`                                       | No       | Customize agent metadata (name, description, url, etc).                     | See below |
 | `options`   | `CreateMomentoAgentOptions`                                | No       | Extra options for TTL, CORS, and agent registration.                        | See below |
 
-### `agentCard` fields
+#### `agentCard` fields
 
 | Field                | Type                    | Description                            | Default                                                                       |
 | -------------------- | ----------------------- | -------------------------------------- | ----------------------------------------------------------------------------- |
@@ -172,7 +186,7 @@ export default {
 | `defaultInputModes`  | `string[]`              | Supported input formats.               | `["text"]`                                                                    |
 | `defaultOutputModes` | `string[]`              | Supported output formats.              | `["text"]`                                                                    |
 
-### `options` fields
+#### `options` fields
 
 | Field               | Type                                      | Description                                                | Default |
 | ------------------- | ----------------------------------------- | ---------------------------------------------------------- | ------- |
@@ -180,7 +194,7 @@ export default {
 | `registerAgent`     | `boolean`                                 | If `true`, registers agent in Momento for global discovery | `false` |
 | `enableCors`        | `boolean \| { origin, headers, methods }` | Enable/disable/configure CORS headers.                     | `false` |
 
-## Agent registration and discovery
+### Agent registration and discovery
 
 When `registerAgent: true` is set in the provided options, your agent will:
 
@@ -190,9 +204,7 @@ When `registerAgent: true` is set in the provided options, your agent will:
 
 To query all agents, use Momento Cache to get the `agents:list` cache key or `agents:<agent name>` cache key for the full agent list or metadata respectively.
 
-**COMING SOON** - A2A client support with auto discover of listed agents so you don't have to check the cache yourself
-
-## Example Output
+### Example output
 
 Here's a sample JSON-RPC response from an agent:
 
@@ -229,6 +241,149 @@ Here's a sample JSON-RPC response from an agent:
 ```
 
 You can stream all events and state transitions live, or load the latest task state from anywhere.
+
+## A2A Client
+
+A2A clients are simple in themselves, there's no magic involved. The client is initialized with an A2A server url, and it has the ability to send and parse messages to it. The [a2a-js](https://www.npmjs.com/package/@a2a-js/sdk) library does a solid job handling simple client management.
+
+However, if you want to take advantage of the registry we created with the A2A Server in this package, it's best to use the **orchestrators** provided.
+
+### Orchestrators
+
+Beyond simple communication with an A2A server, the orchestrators provided in this package will intelligently plan multi-step processes and communicate with all your agents automatically ️🔥 This offers a simple way to build state-of-the-art AI agents with minimal effort.
+
+#### OpenAIOrchestrator
+
+Currently the only supported orchestrator, the `OpenAIOrchestrator` is a built-in utility for building routing agents that can coordinate calls to other A2A agents based on a user message. It uses OpenAI models and can stream responses in real time, making it ideal for multi-agent workflows that require planning, delegation, or summarization.
+
+##### Basic usage
+
+```ts
+import { OpenAIOrchestrator } from 'momento-a2a-agent';
+
+const orchestrator = new OpenAIOrchestrator({
+  momento: {
+    apiKey: 'YOUR_MOMENTO_API_KEY',
+    cacheName: 'YOUR_CACHE'
+  },
+  openai: {
+    apiKey: 'YOUR_OPENAI_API_KEY',
+    model: 'gpt-4o'
+  }
+});
+
+orchestrator.registerAgents([
+  'https://weather.agent',
+  'https://hotel.agent'
+]);
+
+const response = await orchestrator.sendMessage({ message: 'Book me a room in Austin this weekend and check the weather.' });
+console.log(response);
+```
+
+##### Streaming usage
+
+You can stream responses using either a callback or an async iterator. Chunks are returned with a type field indicating whether the output is a partial chunk or the final summary.
+
+```ts
+for await (const chunk of orchestrator.sendMessageStream({ message: 'What animals on the farm are due for shots?' })) {
+  if (chunk.type === 'chunk') process.stdout.write(chunk.text);
+  if (chunk.type === 'final') console.log('\n\nFinal summary:', chunk.text);
+}
+```
+
+Alternatively, use a callback-based approach:
+
+```ts
+await orchestrator.sendMessageStreamWithCallback({ message: 'What is on the schedule today?' }, (chunk) => {
+  if (chunk.type === 'chunk') process.stdout.write(chunk.text);
+  if (chunk.type === 'final') console.log('\nDone:', chunk.text);
+});
+```
+
+##### `OpenAiOrchestratorParams`
+
+| Property                  | Type                     | Required | Description                                                                 |
+|---------------------------|--------------------------|----------|-----------------------------------------------------------------------------|
+| `momento.apiKey`          | `string`                 | ✅       | A Momento API key with access to the target cache                          |
+| `momento.cacheName`       | `string`                 | ✅       | Name of the Momento cache to use for agent discovery and metadata storage  |
+| `openai.apiKey`           | `string`                 | ✅       | OpenAI API key used for agent execution                                    |
+| `openai.model`            | `string`                 | ❌       | Model name (defaults to `'o4-mini'`)                                       |
+| `agentLoadingConcurrency` | `number`                 | ❌       | Max number of concurrent agent card loads (default: `3`)                   |
+
+##### `SendMessageParams`
+
+| Property     | Type       | Required | Description                                                                 |
+|--------------|------------|----------|-----------------------------------------------------------------------------|
+| `message`    | `string`   | ✅       | The user message to route and respond to                                    |
+| `contextId`  | `string`   | ❌       | Optional context ID to use for invocation and continuity across sessions    |
+
+##### `StreamChunk`
+
+| Property | Type                      | Description                                      |
+|----------|---------------------------|--------------------------------------------------|
+| `type`   | `'chunk'` \| `'final'`    | Indicates whether it's a partial or final chunk |
+| `text`   | `string`                  | Text content of the chunk
+
+#### Registering agents
+
+Before sending messages, the orchestrator needs to know which agents it can delegate to. You can provide agent URLs in two ways:
+
+##### 1. Via `registerAgents()`
+
+You can explicitly register agents using their public URLs. These should point to agents that expose a valid `/.well-known/agent.json`.
+
+```ts
+orchestrator.registerAgents([
+  'https://weather.agent',
+  'https://calendar.agent'
+]);
+```
+
+This will trigger background loading of agent cards. Any orchestration call (like sendMessage) will wait for these agents to finish loading before running.
+
+##### 2. Via Momento agent registry
+
+If you have agents registered in the Momento agent list (i.e., they were created with registerAgent: true in createMomentoAgent), the orchestrator will discover and load them automatically. These are read from the cache key defined in AGENT_LIST.
+
+You can combine both sources: any agents passed to registerAgents() will be merged with agents discovered from the registry.
+
+##### Agent card caching
+
+Agent cards are cached in Momento so that repeat calls do not require fetching from the network. If a card is not already cached, the orchestrator will fetch it from the agent's /.well-known/agent.json endpoint and store it automatically.
+
+## Local MCP Server
+
+This package includes a built-in **Model Context Protocol (MCP)** server that runs locally via the CLI. It enables models like Claude or GPT-4o to use your A2A agents as external tools using `mcp_servers`.
+
+### Running the MCP Server
+
+```bash
+npx momento-a2a-agent
+```
+
+You'll see:
+
+```bash
+A2A MCP Server running on stdio
+```
+
+This starts an MCP server over stdio exposing the `invokeAgent` tool, which lets models call other A2A agents.
+
+### Exposed Tools
+
+#### `invokeAgent`
+
+| Field       | Type     | Description                                                      |
+| ----------- | -------- | ---------------------------------------------------------------- |
+| `agentUrl`  | `string` | The base URL of the A2A agent to invoke                          |
+| `message`   | `string` | The instruction or user message to pass to the agent             |
+| `taskId`    | `string` | Optional ID to associate multiple invocations with the same task |
+| `contextId` | `string` | ID used to group related tasks (required by A2A protocol)        |
+
+This tool returns the final text output from the agent, allowing your LLM to route through it as a tool in a broader workflow.
+
+> Note: The MCP server runs over `stdio`, so you'll typically embed this in a CLI tool or adapter process that's called from the model runtime.
 
 ## Links
 

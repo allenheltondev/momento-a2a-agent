@@ -7,7 +7,7 @@ import { AGENT_LIST } from '../src/momento/agent_registry';
 const originalProcessExit = process.exit;
 process.exit = vi.fn((code?: number) => {
   console.warn(`⚠️ process.exit(${code}) called in test - suppressed`);
-});
+}) as unknown as typeof process.exit;
 
 vi.mock('../src/momento/client');
 vi.mock('@openai/agents', async () => {
@@ -28,7 +28,7 @@ vi.mock('@openai/agents', async () => {
       } else {
         return Promise.resolve({ finalOutput: 'mock-output' });
       }
-    }),
+    })
   };
 });
 

@@ -1,0 +1,4 @@
+export const DEFAULTS = {
+  CONCURRENCY_LIMIT: 3,
+  MAX_TOKENS: 4000
+};

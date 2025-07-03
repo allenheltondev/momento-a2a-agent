@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 import { A2AClient } from "./client.js";
 import { v4 as uuidv4 } from 'uuid';
 import { TextPart } from "../types.js";

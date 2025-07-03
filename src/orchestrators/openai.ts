@@ -3,8 +3,10 @@ import { MomentoClient } from '../momento/client.js';
 import { AGENT_LIST } from '../momento/agent_registry.js';
 import { AgentCard, AgentSummary } from '../types.js';
 import { invokeAgent } from '../client/tools.js';
-
-const DEFAULT_CONCURRENCY_LIMIT = 3;
+import { getSystemPrompt } from './prompt.js';
+import { DEFAULTS } from './config.js';
+import { OrchestratorLogger } from './logger.js';
+import { sanitizeResponse } from './utils.js';
 
 export type OpenAiOrchestratorParams = {
   momento: {
@@ -15,7 +17,14 @@ export type OpenAiOrchestratorParams = {
     apiKey: string;
     model?: string;
   };
-  agentLoadingConcurrency?: number;
+  config?: {
+    agentLoadingConcurrency?: number;
+    maxTokens?: number;
+    debug?: boolean;
+    tokenWarningThreshold?: number;
+    preserveThinkingTags?: boolean;
+  };
+  agentLoadingConcurrency?: number; // Keep for backward compatibility
 };
 
 export type SendMessageParams = {
@@ -48,8 +57,12 @@ export class OpenAIOrchestrator {
   private model: string;
   private agentUrls: string[] = [];
   private concurrencyLimit: number;
+  private maxTokens: number | undefined;
+  private tokenWarningThreshold: number;
+  private logger: OrchestratorLogger;
   private _agentCards: AgentCard[] | null = null;
   private _loadingPromise: Promise<AgentCard[]> | null = null;
+  private preserveThinkingTags: boolean;
 
   constructor(params: OpenAiOrchestratorParams) {
     this.client = new MomentoClient({
@@ -59,7 +72,19 @@ export class OpenAIOrchestrator {
 
     setDefaultOpenAIKey(params.openai.apiKey);
     this.model = params.openai.model || 'o4-mini';
-    this.concurrencyLimit = params.agentLoadingConcurrency || DEFAULT_CONCURRENCY_LIMIT;
+    this.concurrencyLimit = params.config?.agentLoadingConcurrency || params.agentLoadingConcurrency || DEFAULTS.CONCURRENCY_LIMIT;
+    this.maxTokens = params.config?.maxTokens;
+    this.tokenWarningThreshold = params.config?.tokenWarningThreshold || (this.maxTokens ? Math.floor(this.maxTokens * 0.8) : 8000);
+    this.preserveThinkingTags = params.config?.preserveThinkingTags || false;
+
+    this.logger = new OrchestratorLogger(params.config?.debug || false, 'OpenAI');
+
+    this.logger.info('Orchestrator initialized', {
+      model: this.model,
+      maxTokens: this.maxTokens,
+      tokenWarningThreshold: this.tokenWarningThreshold,
+      concurrencyLimit: this.concurrencyLimit
+    });
   }
 
   /**
@@ -70,14 +95,17 @@ export class OpenAIOrchestrator {
     this.agentUrls = agentUrls;
     this._agentCards = null;
 
+    this.logger.info(`Registering ${agentUrls.length} agent URLs`);
+
     // Begin loading agents asynchronously
-    this._loadingPromise = this.loadAgents()
+    this._loadingPromise = this.logger.time('Agent loading', () => this.loadAgents())
       .then((cards) => {
         this._agentCards = cards;
+        this.logger.info(`Successfully loaded ${cards.length} agent cards`);
         return cards;
       })
       .catch((err) => {
-        console.error('Failed to load agents:', err);
+        this.logger.error('Failed to load agents:', err);
         this._agentCards = null;
         this._loadingPromise = null;
         throw err;
@@ -85,8 +113,8 @@ export class OpenAIOrchestrator {
   }
 
   /**
- * Returns true if agent cards have already been loaded.
- */
+   * Returns true if agent cards have already been loaded.
+   */
   isReady(): boolean {
     return !!this._agentCards;
   }
@@ -96,14 +124,25 @@ export class OpenAIOrchestrator {
    * @param params - Message and optional context ID.
    */
   async sendMessage(params: SendMessageParams): Promise<string | undefined> {
-    const agentCards = await this.getAgentCards();
-    if (agentCards.length === 0) {
-      throw new Error('No agents were provided.');
-    }
+    return this.logger.time('sendMessage', async () => {
+      const agentCards = await this.getAgentCards();
+      if (agentCards.length === 0) {
+        throw new Error('No agents were provided.');
+      }
 
-    const agent = this.buildAgent(agentCards, params.contextId);
-    const response = await run(agent, params.message, { stream: false });
-    return response.finalOutput;
+      this.logger.info(`Sending message with ${agentCards.length} available agents`);
+      this.logger.logTokenEstimate('Input message', params.message);
+
+      const agent = this.buildAgent(agentCards, params.contextId);
+
+      const response = await run(agent, params.message, { stream: false });
+
+      if (response.finalOutput) {
+        this.logger.logTokenEstimate('Final response', response.finalOutput);
+      }
+
+      return sanitizeResponse(response.finalOutput ?? '', { preserveThinkingTags: this.preserveThinkingTags });
+    });
   }
 
   /**
@@ -119,16 +158,35 @@ export class OpenAIOrchestrator {
       throw new Error('No agents were provided.');
     }
 
+    this.logger.info(`Starting stream with ${agentCards.length} available agents`);
+    this.logger.logTokenEstimate('Input message', params.message);
+
     const agent = this.buildAgent(agentCards, params.contextId);
-    const stream = await run(agent, params.message, { stream: true });
-    const textStream = stream.toTextStream();
 
-    for await (const chunk of textStream) {
-      yield { type: 'chunk', text: chunk };
-    }
+    try {
+      const stream = await run(agent, params.message, { stream: true });
+      const textStream = stream.toTextStream();
 
-    if (typeof stream.finalOutput === 'string') {
-      yield { type: 'final', text: stream.finalOutput.trim() };
+      let totalChunks = 0;
+      let totalLength = 0;
+
+      for await (const chunk of textStream) {
+        totalChunks++;
+        totalLength += chunk.length;
+        this.logger.log(`Stream chunk ${totalChunks}, length: ${chunk.length}, total: ${totalLength}`);
+        yield { type: 'chunk', text: chunk };
+      }
+
+      if (typeof stream.finalOutput === 'string') {
+        this.logger.info(`Stream completed: ${totalChunks} chunks, ${totalLength} total chars`);
+        this.logger.logTokenEstimate('Final stream output', stream.finalOutput);
+        yield { type: 'final', text: sanitizeResponse(stream.finalOutput, { preserveThinkingTags: this.preserveThinkingTags}) };
+      } else {
+        this.logger.warn('Stream completed without final output');
+      }
+    } catch (error) {
+      this.logger.error('Error in sendMessageStream:', error);
+      throw error;
     }
   }
 
@@ -143,118 +201,105 @@ export class OpenAIOrchestrator {
     params: SendMessageParams,
     onText: (text: StreamChunk) => void
   ): Promise<void> {
-    for await (const chunk of this.sendMessageStream(params)) {
-      onText(chunk);
+    try {
+      for await (const chunk of this.sendMessageStream(params)) {
+        onText(chunk);
+      }
+    } catch (error) {
+      this.logger.error('Error in sendMessageStreamWithCallback:', error);
+      // Send error as final chunk
+      onText({ type: 'final', text: `Error: ${error instanceof Error ? error.message : String(error)}` });
     }
   }
 
   /**
- * Safely retrieves agent cards, waiting for loading to finish if needed.
- */
+   * Safely retrieves agent cards, waiting for loading to finish if needed.
+   */
   private async getAgentCards(): Promise<AgentCard[]> {
     if (this._agentCards) return this._agentCards;
     if (this._loadingPromise) return this._loadingPromise;
 
     // Fallback in case registerAgents wasn't called
+    this.logger.info('Loading agents as fallback (registerAgents not called)');
     const cards = await this.loadAgents();
     this._agentCards = cards;
     return cards;
   }
 
   private async loadAgents(): Promise<AgentCard[]> {
+    const agentLogger = this.logger.child('AgentLoader');
+
     const registeredAgents = await this.client.get<AgentSummary[]>(AGENT_LIST, { format: 'json' }) ?? [];
+    agentLogger.info(`Found ${registeredAgents.length} registered agents`);
+
     const allAgents = [...new Set([...this.agentUrls ?? [], ...registeredAgents.filter((ra) => ra.url).map((ra) => ra.url)])];
+    agentLogger.info(`Total unique agent URLs to load: ${allAgents.length}`);
+
     const results: AgentCard[] = [];
 
     for (let i = 0; i < allAgents.length; i += this.concurrencyLimit) {
       const chunk = allAgents.slice(i, i + this.concurrencyLimit);
-      const chunkResults = await Promise.all(chunk.map((url) => this.loadAgentCard(url)));
+      const chunkNum = Math.floor(i / this.concurrencyLimit) + 1;
+
+      const chunkResults = await agentLogger.time(
+        `Loading chunk ${chunkNum} (${chunk.length} agents)`,
+        () => Promise.all(chunk.map((url) => this.loadAgentCard(url)))
+      );
+
       results.push(...chunkResults);
     }
 
+    agentLogger.info(`Successfully loaded ${results.length} agent cards`);
     return results;
   }
 
   private async loadAgentCard(url: string): Promise<AgentCard> {
+    const cardLogger = this.logger.child('AgentCard');
+
     let card = await this.client.get<AgentCard>(url, { format: 'json' });
     if (!card) {
+      cardLogger.log(`Fetching from: ${url}/.well-known/agent.json`);
+
       const response = await fetch(`${url}/.well-known/agent.json`);
       if (!response.ok) {
         const body = await response.text();
-        console.error(response.status, body);
+        cardLogger.error(`Failed to fetch from ${url}:`, response.status, body);
         throw new Error(`Failed to load agent card from ${url}`);
       }
 
       card = await response.json() as AgentCard;
       await this.client.set(url, card);
+      cardLogger.log(`Cached agent card for: ${url}`);
+    } else {
+      cardLogger.log(`Using cached agent card for: ${url}`);
     }
+
     return card;
   }
 
-  private agentCardToPromptFormat(card: AgentCard): string {
-    return `Agent: ${card.name}
-    Description: ${card.description}
-    Url: ${card.url}
-    Skills:
-    ${card.skills.map((skill) => `- ${skill.name}: ${skill.description}
-       Examples:
-         ${(skill.examples && skill.examples.length > 0) ? skill.examples?.join('\n') : 'None.'}`).join('\n')}
-    `;
-  }
-
   private buildAgent(agentCards: AgentCard[], contextId?: string): Agent {
+    const instructions = getSystemPrompt({ agentCards, contextId });
+
+    // Check if we're approaching token limits
+    const estimatedTokens = this.logger.estimateTokens(instructions + (contextId || ''));
+    if (estimatedTokens > this.tokenWarningThreshold) {
+      this.logger.warn(`System prompt approaching token limit: ${estimatedTokens} tokens (threshold: ${this.tokenWarningThreshold})`);
+    }
+
+    this.logger.info('Building agent', {
+      model: this.model,
+      agentCount: agentCards.length,
+      contextId: contextId ? `${contextId.substring(0, 8)}...` : 'none',
+      maxTokens: this.maxTokens,
+      instructionsTokens: estimatedTokens
+    });
+
     return new Agent({
       model: this.model,
       name: 'A2A Orchestrator',
       tools: [invokeAgentTool],
-      instructions: `You are an autonomous orchestration agent with full authority to satisfy user requests by delegating to available specialized agents.
-
-You are given:
-- A block of A2A agent cards describing each agent's capabilities.
-- A user prompt describing a task to be completed.
-- A single tool available to you: 'invokeAgent'.
-
-Your responsibilities:
-1. Understand the user's intent and determine which agents (from the agent cards) are capable of completing the request.
-2. If multiple steps are required, break the request into a high-level plan. Use 'invokeAgent' to execute each step in the correct order.
-3. Always include relevant task context when interacting with an agent so it has enough information to act accurately.
-4. Do not ask the user to confirm which agent to use — that is your job. Assume full routing authority.
-5. Return the final result in natural language, clearly summarizing what was done and what was learned.
-6. If a response from an agent is insufficient, refine the task and try again.
-7. If no agents exist that can satisfy a task, return a response indicating the task cannot be carried out.
-
-About the 'invokeAgent' tool:
-- It sends a task to a specific agent.
-- You must specify: 'agentUrl', 'message', 'contextId' and optionally 'taskId'.
-- You will receive a final message from the agent.
-
-Use 'invokeAgent' whenever you need to delegate a task.
-
----
-EXAMPLES OF DELEGATION
-
-User: "What's the weather in Rome tomorrow?"
-→ Use 'invokeAgent' with 'agentUrl' = "https://agent.workers.dev/weather"' and task = "Get the weather forecast for Rome tomorrow."
-
-User: "Find me a place to stay in Seattle this weekend and tell me if it will be sunny."
-→ Step 1: Ask WeatherAgent for the forecast in Seattle.
-→ Step 2: Ask AirbnbAgent to find lodging in Seattle, and include the weather in your prompt.
-→ Return both results clearly.
-
----
-AGENT CARDS
-
-${agentCards.map((card) => this.agentCardToPromptFormat(card)).join('\n\n')}
-
----
-OTHER CONTEXT
-
-It is currently ${new Date().toISOString()}.
-${contextId ? `Provide context id "${contextId}" to the invokeAgent tool when making a call.` : ''}
-
----
-You are precise, efficient, and fully capable of autonomous planning and agent coordination. When all your steps are completed, return a consolidated, meaningful answer as a response. If you can answer the user query yourself without calling tools, please do so.
-`
+      instructions,
+      ...this.maxTokens && { modelSettings: { maxTokens: this.maxTokens } }
     });
   }
 }

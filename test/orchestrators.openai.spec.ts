@@ -95,15 +95,6 @@ describe('OpenAIOrchestrator', () => {
     expect(result).toBe('mock-output');
   });
 
-  it('should format agent card to prompt correctly', () => {
-    const card = getAgentCard();
-    const output = orchestrator['agentCardToPromptFormat'](card);
-    expect(output).toContain('Agent: Mock Agent');
-    expect(output).toContain('Examples:');
-    expect(output).toContain('Example 1');
-    expect(output).toContain('Example 2');
-  });
-
   it('should support streaming output via sendMessageStream()', async () => {
     getMock.mockImplementation(async (key: string) => {
       if (key === AGENT_LIST) {

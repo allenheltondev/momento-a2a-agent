@@ -1,4 +1,3 @@
-
 # Momento A2A Agent
 
 A production-ready TypeScript package for building stateless [A2A agents](https://google-a2a.github.io/A2A/latest/) on Cloudflare Workers, AWS Lambda, or anywhere JavaScript runs. This package enhances the capabilities of the A2A protocol using [Momento](https://gomomento.com/) for zero-infrastructure *global state, streaming, and agent discovery*.
@@ -254,7 +253,7 @@ Beyond simple communication with an A2A server, the orchestrators provided in th
 
 #### OpenAIOrchestrator
 
-Currently the only supported orchestrator, the `OpenAIOrchestrator` is a built-in utility for building routing agents that can coordinate calls to other A2A agents based on a user message. It uses OpenAI models and can stream responses in real time, making it ideal for multi-agent workflows that require planning, delegation, or summarization.
+The `OpenAIOrchestrator` is a built-in utility for building routing agents that can coordinate calls to other A2A agents based on a user message. It uses OpenAI models and can stream responses in real time, making it ideal for multi-agent workflows that require planning, delegation, or summarization.
 
 ##### Basic usage
 
@@ -281,6 +280,26 @@ const response = await orchestrator.sendMessage({ message: 'Book me a room in Au
 console.log(response);
 ```
 
+##### Advanced configuration
+
+```ts
+const orchestrator = new OpenAIOrchestrator({
+  momento: {
+    apiKey: 'YOUR_MOMENTO_API_KEY',
+    cacheName: 'YOUR_CACHE'
+  },
+  openai: {
+    apiKey: 'YOUR_OPENAI_API_KEY',
+    model: 'gpt-4o'
+  },
+  config: {
+    maxTokens: 4000,
+    agentLoadingConcurrency: 5,
+    debug: true
+  }
+});
+```
+
 ##### Streaming usage
 
 You can stream responses using either a callback or an async iterator. Chunks are returned with a type field indicating whether the output is a partial chunk or the final summary.
@@ -303,15 +322,120 @@ await orchestrator.sendMessageStreamWithCallback({ message: 'What is on the sche
 
 ##### `OpenAiOrchestratorParams`
 
-| Property                  | Type                     | Required | Description                                                                 |
-|---------------------------|--------------------------|----------|-----------------------------------------------------------------------------|
-| `momento.apiKey`          | `string`                 | ✅       | A Momento API key with access to the target cache                          |
-| `momento.cacheName`       | `string`                 | ✅       | Name of the Momento cache to use for agent discovery and metadata storage  |
-| `openai.apiKey`           | `string`                 | ✅       | OpenAI API key used for agent execution                                    |
-| `openai.model`            | `string`                 | ❌       | Model name (defaults to `'o4-mini'`)                                       |
-| `agentLoadingConcurrency` | `number`                 | ❌       | Max number of concurrent agent card loads (default: `3`)                   |
+| Property                  | Type                     | Required | Description                                                                 | Default    |
+|---------------------------|--------------------------|----------|-----------------------------------------------------------------------------|------------|
+| `momento.apiKey`          | `string`                 | ✅       | A Momento API key with access to the target cache                          |            |
+| `momento.cacheName`       | `string`                 | ✅       | Name of the Momento cache to use for agent discovery and metadata storage  |            |
+| `openai.apiKey`           | `string`                 | ✅       | OpenAI API key used for agent execution                                    |            |
+| `openai.model`            | `string`                 | ❌       | Model name                                                                 | `'o4-mini'`|
+| `config.maxTokens`        | `number`                 | ❌       | Maximum tokens for OpenAI responses                                        | `4000`     |
+| `config.agentLoadingConcurrency` | `number`          | ❌       | Max number of concurrent agent card loads                                  | `3`        |
+| `config.debug`           | `boolean`                 | ❌       | Enable detailed logging for debugging                                      | `false`    |
+| `config.tokenWarningThreshold` | `number`            | ❌       | Logs a warning when the task has crossed a specific estimated token usage  | `3200`     |
+| `config.preserveThinkingTags` | `boolean`            | ❌       | Indicate whether to include `<thinking>` tags from the llm in the response | `false`    |
+
+#### AmazonBedrockOrchestrator
+
+The `AmazonBedrockOrchestrator` provides the same orchestration capabilities using Amazon Bedrock models instead of OpenAI. It's ideal for users who prefer AWS services or need to stay within the AWS ecosystem. *This orchestrator is optimized for usage in AWS Lambda*. It will use the credentials and region provided in the runtime.
+
+##### Basic usage
+
+> To use the basic `sendMessage` command in AWS, your executing compute (Lambda, ECS, AppRunner, etc...) must grant the **bedrock:InvokeModel** IAM permission on the requested model. If you use the default values, it must grant the permission on the `arn:aws:bedrock:<AWS Region>::foundation-model/amazon.nova-lite-v1:0` resource.
+
+```ts
+import { AmazonBedrockOrchestrator } from 'momento-a2a-agent';
+
+const orchestrator = new AmazonBedrockOrchestrator({
+  momento: {
+    apiKey: 'YOUR_MOMENTO_API_KEY',
+    cacheName: 'YOUR_CACHE'
+  },
+  bedrock: {
+    modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+  }
+});
+
+orchestrator.registerAgents([
+  'https://weather.agent',
+  'https://calendar.agent'
+]);
+
+const response = await orchestrator.sendMessage({ message: 'Check my calendar and get the weather for tomorrow.' });
+console.log(response);
+```
+
+##### Advanced configuration
+
+```ts
+const orchestrator = new AmazonBedrockOrchestrator({
+  momento: {
+    apiKey: 'YOUR_MOMENTO_API_KEY',
+    cacheName: 'YOUR_CACHE'
+  },
+  bedrock: {
+    region: 'us-west-2',
+    modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    credentials: {
+      accessKeyId: 'YOUR_ACCESS_KEY',
+      secretAccessKey: 'YOUR_SECRET_KEY'
+    }
+  },
+  config: {
+    maxTokens: 4000,
+    tokenWarningThreshold: 3500,
+    agentLoadingConcurrency: 5,
+    debug: true
+  }
+});
+```
+
+##### Streaming usage
+
+The Bedrock orchestrator supports the following streaming patterns: `sendMessageStream` and `sendMessageStreamWithCallback`
+
+> To use the `sendMessageStream` or `sendMessageStreamWithCallback` commands in AWS, your executing compute (Lambda, ECS, AppRunner, etc...) must grant the **bedrock:InvokeModelWithResponseStream** IAM permission on the requested model. If you use the default values, it must grant the permission on the `arn:aws:bedrock:<AWS Region>::foundation-model/amazon.nova-lite-v1:0` resource.
+
+**`sendMessageStream`**
+```ts
+for await (const chunk of orchestrator.sendMessageStream({ message: 'Plan my day' })) {
+  if (chunk.type === 'chunk') process.stdout.write(chunk.text);
+  if (chunk.type === 'final') console.log('\n\nFinal summary:', chunk.text);
+}
+```
+
+**`sendMessageStreamWithCallback`**
+```ts
+await orchestrator.sendMessageStreamWithCallback(
+  {
+    message: "What are the names of my garen beds?",
+    contextId: 'allen'
+  },
+  (chunk) => console.log(chunk));
+```
+
+##### `AmazonBedrockOrchestratorParams`
+
+| Property                  | Type                     | Required | Description                                                                 | Default                                      |
+|---------------------------|--------------------------|----------|-----------------------------------------------------------------------------|----------------------------------------------|
+| `momento.apiKey`          | `string`                 | ✅       | A Momento API key with access to the target cache                          |                                              |
+| `momento.cacheName`       | `string`                 | ✅       | Name of the Momento cache to use for agent discovery and metadata storage  |                                              |
+| `bedrock.region`          | `string`                 | ❌       | AWS region for Bedrock service                                             | Provided in runtime                          |
+| `bedrock.modelId`         | `string`                 | ❌       | Bedrock model identifier                                                   | `'amazon.nova-lite-v1:0'` |
+| `bedrock.accessKeyId`     | `string`                 | ❌       | AWS access key id to use                                                   | Provided in runtime                          |
+| `bedrock.secretAccessKey` | `string`                 | ❌       | AWS secret access key to use                                               | Provided in runtime                          |
+| `bedrock.profile`         | `string`                 | ❌       | AWS profile to use for invocation                                          | `default`                                    |
+| `config.maxTokens`        | `number`                 | ❌       | Maximum tokens for Bedrock responses                                       | `4096`                                       |
+| `config.agentLoadingConcurrency` | `number`          | ❌       | Max number of concurrent agent card loads                                  | `3`                                          |
+| `config.debug`            | `boolean`                | ❌       | Enable detailed logging for debugging                                      | `false`                                      |
+| `config.tokenWarningThreshold` | `number`            | ❌       | Aborts execution when token usage exceeds this approximate value           | `3200`     |
+| `config.preserveThinkingTags` | `boolean`            | ❌       | Indicate whether to include `<thinking>` tags from the llm in the response | `false`    |
+##### Supported Models
+
+Please refer to the [AWS documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/models-features.html) to find the list of available AI models with their features.
 
 ##### `SendMessageParams`
+
+Both orchestrators support the same message parameters:
 
 | Property     | Type       | Required | Description                                                                 |
 |--------------|------------|----------|-----------------------------------------------------------------------------|
@@ -323,11 +447,11 @@ await orchestrator.sendMessageStreamWithCallback({ message: 'What is on the sche
 | Property | Type                      | Description                                      |
 |----------|---------------------------|--------------------------------------------------|
 | `type`   | `'chunk'` \| `'final'`    | Indicates whether it's a partial or final chunk |
-| `text`   | `string`                  | Text content of the chunk
+| `text`   | `string`                  | Text content of the chunk                        |
 
 #### Registering agents
 
-Before sending messages, the orchestrator needs to know which agents it can delegate to. You can provide agent URLs in two ways:
+Before sending messages, both orchestrators need to know which agents they can delegate to. You can provide agent URLs in two ways:
 
 ##### 1. Via `registerAgents()`
 

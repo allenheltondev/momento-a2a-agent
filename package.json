@@ -1,6 +1,6 @@
 {
   "name": "momento-a2a-agent",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "description": "Build stateless A2A agents for use in serverless environments. Powered by Momento Cache and Topics.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

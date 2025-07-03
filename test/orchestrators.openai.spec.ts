@@ -4,6 +4,11 @@ import { MomentoClient } from '../src/momento/client';
 import { AgentCard, AgentSummary } from '../src/types';
 import { AGENT_LIST } from '../src/momento/agent_registry';
 
+const originalProcessExit = process.exit;
+process.exit = vi.fn((code?: number) => {
+  console.warn(`⚠️ process.exit(${code}) called in test - suppressed`);
+});
+
 vi.mock('../src/momento/client');
 vi.mock('@openai/agents', async () => {
   const actual = await vi.importActual('@openai/agents');
@@ -167,9 +172,9 @@ describe('OpenAIOrchestrator', () => {
     );
   });
 
-
   afterEach(() => {
     vi.clearAllMocks();
+    process.exit = originalProcessExit;
   });
 });
 

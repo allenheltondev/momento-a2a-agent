@@ -23,7 +23,7 @@ vi.mock('@openai/agents', async () => {
       } else {
         return Promise.resolve({ finalOutput: 'mock-output' });
       }
-    }),
+    })
   };
 });
 
@@ -165,11 +165,6 @@ describe('OpenAIOrchestrator', () => {
     await expect(orchestrator.sendMessage({ message: 'test' })).rejects.toThrow(
       'Failed to load agent card from https://bad.agent'
     );
-  });
-
-
-  afterEach(() => {
-    vi.clearAllMocks();
   });
 });
 

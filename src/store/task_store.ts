@@ -1,5 +1,6 @@
 import { Task } from "../types";
 import { MomentoClient } from "../momento/client.js";
+import { v4 as uuidv4 } from "uuid";
 
 /**
  * Task storage interface (spec-aligned)
@@ -69,7 +70,7 @@ export class MomentoTaskStore implements TaskStore {
           for (const part of artifact.parts) {
             // --- FILE PART - store as binary data in cache ---
             if (part.kind === "file" && part.file && "bytes" in part.file && part.file.bytes) {
-              const cacheKey = `artifact:${task.id}:${artifact.artifactId}:${crypto.randomUUID()}`;
+              const cacheKey = `artifact:${task.id}:${artifact.artifactId}:${uuidv4()}`;
               const bytes = base64ToUint8Array(part.file.bytes);
 
               await this.client.set(cacheKey, bytes, ttlSeconds ? { ttlSeconds } : undefined);
@@ -81,7 +82,7 @@ export class MomentoTaskStore implements TaskStore {
 
             // --- DATA PART - store as stringified json in cache ---
             if (part.kind === "data" && part.data) {
-              const cacheKey = `artifact:${task.id}:${artifact.artifactId}:${crypto.randomUUID()}`;
+              const cacheKey = `artifact:${task.id}:${artifact.artifactId}:${uuidv4()}`;
               await this.client.set(cacheKey, part.data, ttlSeconds ? { ttlSeconds } : undefined);
               if (!part.metadata) part.metadata = {};
               part.metadata.cacheKey = cacheKey;

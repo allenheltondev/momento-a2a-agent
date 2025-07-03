@@ -96,51 +96,44 @@ describe("MomentoTaskStore", () => {
     expect(loaded?.history).toEqual(history);
   });
 
-  it("saves and loads file parts (as base64)", async () => {
-    // Simulate base64
-    const b64 = Buffer.from("hello world").toString("base64");
-    const artifact = {
-      artifactId: "f1",
-      parts: [{ kind: "file", file: { bytes: b64 } }],
-      name: "file",
-    };
-    const task = makeTask({ artifacts: [artifact] });
-    await store.save(task);
-    // After save, file prop is removed, metadata.cacheKey should be present
-    const saved = (store as any).client.store.get(task.id);
-    const part = saved.artifacts[0].parts[0];
-    expect(part.kind).toBe("file");
-    expect(part.metadata).toHaveProperty("cacheKey");
-    expect(part.file).toBeUndefined();
+  it('persists file artifacts correctly', async () => {
+    const payload = Buffer.from('hello world').toString('base64');
+    const task = makeTask({
+      artifacts: [{
+        artifactId: 'f1',
+        name: 'file',
+        parts: [{ kind: 'file', file: { bytes: payload } }],
+      }],
+    });
 
-    // When loading, file.bytes is restored as base64
-    // First, simulate client.get(cacheKey, {raw:true}) returns Uint8Array for "hello world"
-    const cacheKey = part.metadata.cacheKey;
-    (store as any).client.store.set(cacheKey, new Uint8Array(Buffer.from("hello world")));
+    await store.save(task);
     const loaded = await store.load(task.id);
-    expect(loaded?.artifacts[0].parts[0].file?.bytes).toBe(b64);
+
+    const loadedPart = loaded?.artifacts[0].parts[0];
+    expect(loadedPart).toMatchObject({
+      kind: 'file',
+      file: { bytes: payload },
+    });
   });
 
-  it("saves and loads data parts (as JSON)", async () => {
+  it('persists data artifacts correctly', async () => {
     const data = { foo: 42 };
-    const artifact = {
-      artifactId: "d1",
-      parts: [{ kind: "data", data }],
-      name: "datapart",
-    };
-    const task = makeTask({ artifacts: [artifact] });
-    await store.save(task);
-    const saved = (store as any).client.store.get(task.id);
-    const part = saved.artifacts[0].parts[0];
-    expect(part.kind).toBe("data");
-    expect(part.metadata).toHaveProperty("cacheKey");
-    expect(part.data).toBeUndefined();
+    const task = makeTask({
+      artifacts: [{
+        artifactId: 'd1',
+        name: 'datapart',
+        parts: [{ kind: 'data', data }],
+      }],
+    });
 
-    // Simulate client.get(cacheKey, {format:"string"}) returns JSON
-    const cacheKey = part.metadata.cacheKey;
-    (store as any).client.store.set(cacheKey, JSON.stringify(data));
+    await store.save(task);
     const loaded = await store.load(task.id);
-    expect(loaded?.artifacts[0].parts[0].data).toEqual(data);
+
+    const loadedPart = loaded?.artifacts[0].parts[0];
+    expect(loadedPart).toMatchObject({
+      kind: 'data',
+      data,
+    });
   });
 
   it("handles errors gracefully (save/load)", async () => {

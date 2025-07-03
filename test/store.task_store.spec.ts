@@ -6,33 +6,17 @@ vi.mock("../src/momento/client", () => {
   class FakeMomentoClient {
     store = new Map<string, any>();
 
-    async get(key: string, opts?: GetOptions): Promise<any> {
-      const rawValue = this.store.get(key);
-      if (!rawValue) return undefined;
-
-      if (opts?.raw) {
-        return Uint8Array.from(Buffer.from(rawValue, "base64"));
-      }
-
-      let value = typeof rawValue === "string" ? rawValue : JSON.stringify(rawValue);
-
-      if (opts?.valueEncoding === "base64") {
-        value = Buffer.from(value, "utf-8").toString("base64");
-      }
-
-      if (opts?.format === "json") {
-        return JSON.parse(value);
-      }
+    async get(key: string, opts?: any) {
+      const value = this.store.get(key);
+      if (!value) return undefined;
+      if (opts?.raw) return value;
+      if (opts?.format === "json") return value;
+      if (opts?.format === "string") return typeof value === "string" ? value : JSON.stringify(value);
 
       return value;
     }
 
-    async set(key: string, value: any, opts?: SetOptions): Promise<void> {
-      if (opts?.valueEncode === "base64") {
-        if (typeof value !== "string") value = JSON.stringify(value);
-        value = Buffer.from(value, "utf-8").toString("base64");
-      }
-
+    async set(key: string, value: any): Promise<void> {
       this.store.set(key, value);
     }
   }

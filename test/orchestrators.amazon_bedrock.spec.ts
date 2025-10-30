@@ -23,7 +23,7 @@ const dummyCard: AgentCard = {
     }
   ],
   capabilities: {
-    streaming: false
+    streaming: true
   },
   defaultInputModes: ['text'],
   defaultOutputModes: ['text']
@@ -129,42 +129,113 @@ describe('AmazonBedrockOrchestrator', () => {
   });
 
 
-it('should yield streamed chunks and final text', async () => {
-  orchestrator['_agentCards'] = [dummyCard];
-  mockBedrockSend.mockResolvedValue({
-    stream: {
-      [Symbol.asyncIterator]: async function* () {
-        // Start of message
-        yield { messageStart: {} };
+  it('should yield streamed chunks and final text', async () => {
+    orchestrator['_agentCards'] = [dummyCard];
+    mockBedrockSend.mockResolvedValue({
+      stream: {
+        [Symbol.asyncIterator]: async function* () {
+          // Start of message
+          yield { messageStart: {} };
 
-        // Start of content block (text)
-        yield { contentBlockStart: { start: {} } };
+          // Start of content block (text)
+          yield { contentBlockStart: { start: {} } };
 
-        // Text deltas
-        yield { contentBlockDelta: { delta: { text: 'Hello ' } } };
-        yield { contentBlockDelta: { delta: { text: 'world!' } } };
+          // Text deltas
+          yield { contentBlockDelta: { delta: { text: 'Hello ' } } };
+          yield { contentBlockDelta: { delta: { text: 'world!' } } };
 
-        // End of content block
-        yield { contentBlockStop: {} };
+          // End of content block
+          yield { contentBlockStop: {} };
 
-        // End of message
-        yield { messageStop: {} };
+          // End of message
+          yield { messageStop: {} };
+        }
+      }
+    });
+
+    const chunks: string[] = [];
+    let final: string | null = null;
+
+    for await (const chunk of orchestrator.sendMessageStream({ message: 'Hi' })) {
+      if (chunk.type === 'chunk') {
+        chunks.push(chunk.text);
+      } else if (chunk.type === 'final') {
+        final = chunk.text;
       }
     }
+
+    expect(chunks.join('')).toBe('Hello world!');
+    expect(final).toBe('Hello world!');
   });
 
-  const chunks: string[] = [];
-  let final: string | null = null;
+  it('should process multiple tool calls in a single response', async () => {
+    orchestrator['_agentCards'] = [dummyCard];
 
-  for await (const chunk of orchestrator.sendMessageStream({ message: 'Hi' })) {
-    if (chunk.type === 'chunk') {
-      chunks.push(chunk.text);
-    } else if (chunk.type === 'final') {
-      final = chunk.text;
-    }
-  }
+    // Mock the first response with multiple tool calls
+    mockBedrockSend.mockResolvedValueOnce({
+      output: {
+        message: {
+          content: [
+            {
+              toolUse: {
+                toolUseId: 'tool1',
+                name: 'invokeAgent',
+                input: { agentUrl: 'https://agent1.com', message: 'test1' }
+              }
+            },
+            {
+              toolUse: {
+                toolUseId: 'tool2',
+                name: 'invokeAgent',
+                input: { agentUrl: 'https://agent2.com', message: 'test2' }
+              }
+            }
+          ]
+        }
+      }
+    });
 
-  expect(chunks.join('')).toBe('Hello world!');
-  expect(final).toBe('Hello world!');
-});
+    // Mock the second response with final text after tool execution
+    mockBedrockSend.mockResolvedValueOnce({
+      output: {
+        message: {
+          content: [{ text: 'Final response after multiple tools' }]
+        }
+      }
+    });
+
+    // Mock fetch to simulate successful agent card fetching and tool responses
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(dummyCard)
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(dummyCard)
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('Tool 1 result')
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('Tool 2 result')
+      });
+
+    const response = await orchestrator.sendMessage({ message: 'Test multiple tools' });
+
+    expect(response).toBe('Final response after multiple tools');
+    expect(mockBedrockSend).toHaveBeenCalledTimes(2);
+
+    // The key test: verify that both tool calls were processed
+    // This proves the fix works - before the fix, only one tool would be called
+    expect(global.fetch).toHaveBeenCalledWith('https://agent1.com/.well-known/agent.json', expect.any(Object));
+    expect(global.fetch).toHaveBeenCalledWith('https://agent2.com/.well-known/agent.json', expect.any(Object));
+
+    // Verify we got the expected final response
+    expect(response).toBe('Final response after multiple tools');
+  });
+
+
 });

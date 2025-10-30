@@ -167,45 +167,53 @@ export class AmazonBedrockOrchestrator {
           messages.push({ role: 'assistant', content: messageContent });
 
           // Check if we have tool use or just text
-          const toolUseItem = messageContent.find((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
+          const toolUseItems = messageContent.filter((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
             'toolUse' in item && !!item.toolUse
           );
           const textItems = messageContent.filter((item): item is ContentBlock & { text: string; } =>
             'text' in item && !!item.text
           );
 
-          if (toolUseItem) {
-            const { toolUse } = toolUseItem;
-            const { name: toolName, input: toolInput, toolUseId } = toolUse;
+          if (toolUseItems.length > 0) {
+            this.logger.info(`Iteration ${iteration + 1}: Processing ${toolUseItems.length} tool call(s)`);
 
-            this.logger.info(`Iteration ${iteration + 1}: Tool called: ${toolName}`, { toolInput, toolUseId });
+            // Execute all tools and collect results
+            const toolResults: ToolResultBlock[] = [];
 
-            // Execute the tool
-            let toolResult: any;
-            try {
-              const tool = tools.find(t => t.spec.name === toolName);
-              if (!tool) {
-                throw new Error(`Unknown tool: ${toolName}`);
+            for (const toolUseItem of toolUseItems) {
+              const { toolUse } = toolUseItem;
+              const { name: toolName, input: toolInput, toolUseId } = toolUse;
+
+              this.logger.info(`Iteration ${iteration + 1}: Tool called: ${toolName}`, { toolInput, toolUseId });
+
+              // Execute the tool
+              let toolResult: any;
+              try {
+                const tool = tools.find(t => t.spec.name === toolName);
+                if (!tool) {
+                  throw new Error(`Unknown tool: ${toolName}`);
+                }
+                toolResult = await tool.handler(toolInput);
+                this.logger.info(`Tool ${toolName} result:`, toolResult);
+              } catch (toolError: any) {
+                this.logger.error(`Tool ${toolName} failed:`, toolError);
+                toolResult = { error: toolError.message };
               }
-              toolResult = await tool.handler(toolInput);
-              this.logger.info(`Tool ${toolName} result:`, toolResult);
-            } catch (toolError: any) {
-              this.logger.error(`Tool ${toolName} failed:`, toolError);
-              toolResult = { error: toolError.message };
+
+              // Add the tool result to our collection
+              toolResults.push({
+                toolUseId,
+                content: [{ text: JSON.stringify(toolResult) }]
+              });
             }
 
-            // Add the tool result back to the conversation
-            const toolResultBlock: ToolResultBlock = {
-              toolUseId,
-              content: [{ text: JSON.stringify(toolResult) }]
-            };
-
+            // Add all tool results back to the conversation in a single message
             messages.push({
               role: 'user',
-              content: [{ toolResult: toolResultBlock }]
+              content: toolResults.map(result => ({ toolResult: result }))
             });
 
-            // Continue the loop to get the model's response to the tool result
+            // Continue the loop to get the model's response to the tool results
           } else if (textItems.length > 0) {
             // We got text response(s) - concatenate them and we're done
             finalResponse = textItems.map(item => item.text).join('');
@@ -331,45 +339,52 @@ export class AmazonBedrockOrchestrator {
         }
 
         // Check what type of content we received
-        const toolUseItem = messageContent.find((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
+        const toolUseItems = messageContent.filter((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
           'toolUse' in item && !!item.toolUse
         );
         const textItems = messageContent.filter((item): item is ContentBlock & { text: string; } =>
           'text' in item && !!item.text
         );
 
-        if (toolUseItem) {
-          // We have a tool use - execute it
-          const { toolUse } = toolUseItem;
-          const { name: toolName, input: toolInput, toolUseId } = toolUse;
+        if (toolUseItems.length > 0) {
+          this.logger.info(`Stream iteration ${iteration}: Processing ${toolUseItems.length} tool call(s)`);
 
-          this.logger.info(`Stream iteration ${iteration}: Tool called: ${toolName}`, { toolInput, toolUseId });
+          // Execute all tools and collect results
+          const toolResults: ToolResultBlock[] = [];
 
-          let toolResult: any;
-          try {
-            const tool = tools.find(t => t.spec.name === toolName);
-            if (!tool) {
-              throw new Error(`Unknown tool: ${toolName}`);
+          for (const toolUseItem of toolUseItems) {
+            const { toolUse } = toolUseItem;
+            const { name: toolName, input: toolInput, toolUseId } = toolUse;
+
+            this.logger.info(`Stream iteration ${iteration}: Tool called: ${toolName}`, { toolInput, toolUseId });
+
+            let toolResult: any;
+            try {
+              const tool = tools.find(t => t.spec.name === toolName);
+              if (!tool) {
+                throw new Error(`Unknown tool: ${toolName}`);
+              }
+              toolResult = await tool.handler(toolInput);
+              this.logger.info(`Tool ${toolName} result:`, toolResult);
+            } catch (toolError: any) {
+              this.logger.error(`Tool ${toolName} failed:`, toolError);
+              toolResult = { error: toolError.message };
             }
-            toolResult = await tool.handler(toolInput);
-            this.logger.info(`Tool ${toolName} result:`, toolResult);
-          } catch (toolError: any) {
-            this.logger.error(`Tool ${toolName} failed:`, toolError);
-            toolResult = { error: toolError.message };
+
+            // Add the tool result to our collection
+            toolResults.push({
+              toolUseId,
+              content: [{ text: JSON.stringify(toolResult) }]
+            });
           }
 
-          // Add the tool result back to the conversation
-          const toolResultBlock: ToolResultBlock = {
-            toolUseId,
-            content: [{ text: JSON.stringify(toolResult) }]
-          };
-
+          // Add all tool results back to the conversation in a single message
           messages.push({
             role: 'user',
-            content: [{ toolResult: toolResultBlock }]
+            content: toolResults.map(result => ({ toolResult: result }))
           });
 
-          // Continue the loop to get the model's response to the tool result
+          // Continue the loop to get the model's response to the tool results
           continue;
         } else if (textItems.length > 0) {
           // We got text response(s) - this is our final response

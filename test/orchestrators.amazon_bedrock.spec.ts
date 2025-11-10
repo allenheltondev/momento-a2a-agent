@@ -287,12 +287,13 @@ describe('AmazonBedrockOrchestrator - custom tools', () => {
 
     orchestrator = new AmazonBedrockOrchestrator({
       momento: { apiKey: 'key', cacheName: 'cache' },
-      tools: [customTool]
+      config: {
+        tools: [customTool]
+      }
     });
-    // Prepare one agent card so isReady passes
+
     orchestrator['\u005fagentCards'] = [dummyCard];
 
-    // First call returns final text so we can inspect command input
     mockBedrockSend.mockResolvedValueOnce({
       output: { message: { content: [{ text: 'ok' }] } }
     });
@@ -311,12 +312,14 @@ describe('AmazonBedrockOrchestrator - custom tools', () => {
       name: 'echoThing',
       description: 'Echo the provided text',
       schema: z.object({ text: z.string() }),
-      handler: vi.fn().mockImplementation(async ({ text }: { text: string }) => `ECHO:${text}`)
+      handler: vi.fn().mockImplementation(async ({ text }: { text: string; }) => `ECHO:${text}`)
     };
 
     orchestrator = new AmazonBedrockOrchestrator({
       momento: { apiKey: 'key', cacheName: 'cache' },
-      tools: [echoTool]
+      config: {
+        tools: [echoTool]
+      }
     });
     orchestrator['\u005fagentCards'] = [dummyCard];
 

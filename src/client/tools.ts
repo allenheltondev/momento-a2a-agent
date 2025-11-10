@@ -1,7 +1,6 @@
 import { z } from "zod/v4";
 import { A2AClient } from "./client.js";
 import { v4 as uuidv4 } from 'uuid';
-import { TextPart } from "../types.js";
 
 export const invokeAgent: any = {
   name: 'invokeAgent',
@@ -14,7 +13,7 @@ export const invokeAgent: any = {
   }),
   handler: async ({ agentUrl, message, contextId, taskId }: z.infer<typeof invokeAgent.schema>) => {
     const client = new A2AClient(agentUrl);
-    const stream = await client.sendMessageStream({
+    const response = await client.sendMessage({
       message: {
         messageId: uuidv4(),
         kind: 'message',
@@ -25,24 +24,16 @@ export const invokeAgent: any = {
       }
     });
 
-    let finalText = "";
-    let finalSeen = false;
-
-    for await (const event of stream) {
-      if (
-        event.kind === "status-update" &&
-        event.final === true &&
-        event.status?.message?.parts?.length
-      ) {
-        const textPart = event.status.message.parts.find((p) => p.kind === "text") as TextPart;
-        if (textPart?.text) {
-          finalText = textPart.text;
-          finalSeen = true;
-          break; // Exit the loop — we're done
-        }
-      }
+    if ('error' in response) {
+      throw new Error(`Agent error: ${response.error.message}`);
     }
 
-    return finalText;
+    const result = response.result;
+    if (result.kind === 'message') {
+      const textPart = result.parts.find((p) => p.kind === 'text');
+      return textPart && 'text' in textPart ? textPart.text : '';
+    }
+
+    return '';
   }
 };

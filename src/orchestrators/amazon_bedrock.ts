@@ -33,7 +33,7 @@ export type AmazonBedrockOrchestratorParams = {
     tools?: Array<{
       name: string;
       description: string;
-      schema: z.ZodTypeAny;
+      schema: any;
       handler: (input: any) => Promise<any> | any;
     }>;
   };
@@ -113,7 +113,7 @@ export class AmazonBedrockOrchestrator {
         spec: {
           name: t.name,
           description: t.description,
-          inputSchema: { json: z.toJSONSchema(t.schema) as any }
+          inputSchema: { json: t.schema }
         },
         handler: t.handler
       })) || [])

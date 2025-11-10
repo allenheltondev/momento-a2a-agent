@@ -23,24 +23,19 @@ export type AmazonBedrockOrchestratorParams = {
     region?: string;
     profile?: string;
   };
-  /**
-   * Optional additional tools to expose to the model.
-   * Uses the same convention as invokeAgent in src/client/tools.ts:
-   * { name, description, schema (zod), handler }
-   */
-  tools?: Array<{
-    name: string;
-    description: string;
-    schema: z.ZodTypeAny;
-    handler: (input: any) => Promise<any> | any;
-  }>;
   config?: {
     agentLoadingConcurrency?: number;
-    systemPrompt?: string
+    systemPrompt?: string;
     maxTokens?: number;
     tokenWarningThreshold?: number;
     debug?: boolean;
     preserveThinkingTags?: boolean;
+    tools?: Array<{
+      name: string;
+      description: string;
+      schema: z.ZodTypeAny;
+      handler: (input: any) => Promise<any> | any;
+    }>;
   };
 };
 
@@ -111,10 +106,10 @@ export class AmazonBedrockOrchestrator {
     this.preserveThinkingTags = params.config?.preserveThinkingTags || false;
     this.additionalSystemPrompt = params.config?.systemPrompt;
     this.logger = new OrchestratorLogger(params.config?.debug || false, 'Bedrock');
-    
+
     this.tools = [
       invokeAgentTool,
-      ...(params.tools?.map((t) => ({
+      ...(params.config?.tools?.map((t) => ({
         spec: {
           name: t.name,
           description: t.description,
@@ -157,7 +152,13 @@ export class AmazonBedrockOrchestrator {
    * Returns true if agent cards have already been loaded.
    */
   isReady(): boolean {
-    return !!this._agentCards;
+    // Ready if:
+    // - Explicit agents were provided and have been loaded, or
+    // - No explicit agents were registered (allow operation without agents)
+    if (this.agentUrls.length > 0) {
+      return !!this._agentCards;
+    }
+    return true;
   }
 
   /**
@@ -365,9 +366,9 @@ export class AmazonBedrockOrchestrator {
         }
 
         // Check what type of content we received
-          const toolUseItems = messageContent.filter((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
+        const toolUseItems = messageContent.filter((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
           'toolUse' in item && !!item.toolUse
-          );
+        );
         const textItems = messageContent.filter((item): item is ContentBlock & { text: string; } =>
           'text' in item && !!item.text
         );
@@ -416,7 +417,7 @@ export class AmazonBedrockOrchestrator {
           // We got text response(s) - this is our final response
           const finalResponse = textItems.map(item => item.text).join('');
           this.logger.info(`Stream iteration ${iteration}: Final response completed`);
-          yield { type: 'final', text: sanitizeResponse(finalResponse, { preserveThinkingTags: this.preserveThinkingTags}) };
+          yield { type: 'final', text: sanitizeResponse(finalResponse, { preserveThinkingTags: this.preserveThinkingTags }) };
           return;
         } else {
           // Unexpected case - no tool use and no text
@@ -553,7 +554,7 @@ export class AmazonBedrockOrchestrator {
       toolConfig: {
         tools: this.tools.map((t) => ({ toolSpec: t.spec }))
       },
-    ...(maxTokens && { inferenceConfig: { maxTokens } })
+      ...(maxTokens && { inferenceConfig: { maxTokens } })
     };
     return new ConverseStreamCommand(params);
   }

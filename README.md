@@ -375,18 +375,70 @@ const orchestrator = new AmazonBedrockOrchestrator({
   bedrock: {
     region: 'us-west-2',
     modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-    credentials: {
-      accessKeyId: 'YOUR_ACCESS_KEY',
-      secretAccessKey: 'YOUR_SECRET_KEY'
-    }
+    accessKeyId: 'YOUR_ACCESS_KEY',
+    secretAccessKey: 'YOUR_SECRET_KEY',
+    profile: 'default'
   },
   config: {
     maxTokens: 4000,
     tokenWarningThreshold: 3500,
     agentLoadingConcurrency: 5,
-    debug: true
+    debug: true,
+    systemPrompt: 'Follow safety rules and summarize results clearly.',
+    preserveThinkingTags: false
   }
 });
+```
+
+##### Complete usage (all params, custom tools)
+
+```ts
+import { AmazonBedrockOrchestrator } from 'momento-a2a-agent';
+import * as z from 'zod/v4';
+
+const getTime = {
+  name: 'getTime',
+  description: 'Return the current time. Optionally specify a time zone.',
+  schema: z.object({ tz: z.string().optional() }),
+  handler: async ({ tz }: { tz?: string }) => {
+    return new Date().toLocaleString('en-US', tz ? { timeZone: tz } : undefined);
+  }
+};
+
+const orchestrator = new AmazonBedrockOrchestrator({
+  momento: {
+    apiKey: process.env.MOMENTO_API_KEY!,
+    cacheName: 'ai'
+  },
+  bedrock: {
+    // If omitted, region/profile/credentials are taken from the AWS runtime
+    region: 'us-west-2',
+    modelId: 'amazon.nova-lite-v1:0',
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+    profile: 'default'
+  },
+  tools: [getTime],
+  config: {
+    agentLoadingConcurrency: 3,
+    systemPrompt: 'Prefer internal tools when possible. Keep answers concise.',
+    maxTokens: 4000,
+    tokenWarningThreshold: 3200,
+    debug: false,
+    preserveThinkingTags: false
+  }
+});
+
+orchestrator.registerAgents([
+  'https://weather.agent',
+  'https://calendar.agent'
+]);
+
+const result = await orchestrator.sendMessage({
+  message: 'What is on my calendar tomorrow and will it rain?',
+  contextId: 'user-123'
+});
+console.log(result);
 ```
 
 ##### Streaming usage
@@ -424,11 +476,13 @@ await orchestrator.sendMessageStreamWithCallback(
 | `bedrock.accessKeyId`     | `string`                 | ❌       | AWS access key id to use                                                   | Provided in runtime                          |
 | `bedrock.secretAccessKey` | `string`                 | ❌       | AWS secret access key to use                                               | Provided in runtime                          |
 | `bedrock.profile`         | `string`                 | ❌       | AWS profile to use for invocation                                          | `default`                                    |
+| `tools`                   | `Array<{ name, description, schema, handler }>` | ❌ | Additional tools exposed to the LLM (Zod schema + handler shape matches `invokeAgent`) | `[]`                           |
 | `config.maxTokens`        | `number`                 | ❌       | Maximum tokens for Bedrock responses                                       | `4096`                                       |
 | `config.agentLoadingConcurrency` | `number`          | ❌       | Max number of concurrent agent card loads                                  | `3`                                          |
 | `config.debug`            | `boolean`                | ❌       | Enable detailed logging for debugging                                      | `false`                                      |
 | `config.tokenWarningThreshold` | `number`            | ❌       | Aborts execution when token usage exceeds this approximate value           | `3200`     |
 | `config.preserveThinkingTags` | `boolean`            | ❌       | Indicate whether to include `<thinking>` tags from the llm in the response | `false`    |
+| `config.systemPrompt`     | `string`                 | ❌       | Additional system instructions appended to the model prompt                 |                                              |
 ##### Supported Models
 
 Please refer to the [AWS documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/models-features.html) to find the list of available AI models with their features.

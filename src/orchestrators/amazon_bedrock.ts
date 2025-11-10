@@ -23,8 +23,20 @@ export type AmazonBedrockOrchestratorParams = {
     region?: string;
     profile?: string;
   };
+  /**
+   * Optional additional tools to expose to the model.
+   * Uses the same convention as invokeAgent in src/client/tools.ts:
+   * { name, description, schema (zod), handler }
+   */
+  tools?: Array<{
+    name: string;
+    description: string;
+    schema: z.ZodTypeAny;
+    handler: (input: any) => Promise<any> | any;
+  }>;
   config?: {
     agentLoadingConcurrency?: number;
+    systemPrompt?: string
     maxTokens?: number;
     tokenWarningThreshold?: number;
     debug?: boolean;
@@ -55,7 +67,7 @@ const invokeAgentTool = {
   handler: invokeAgent.handler
 };
 
-const tools = [invokeAgentTool];
+type BedrockTool = typeof invokeAgentTool;
 
 /**
  * Orchestrates conversations between the user and distributed A2A agents using Amazon Bedrock.
@@ -72,6 +84,8 @@ export class AmazonBedrockOrchestrator {
   private bedrock: BedrockRuntimeClient;
   private logger: OrchestratorLogger;
   private preserveThinkingTags: boolean;
+  private additionalSystemPrompt?: string;
+  private tools: BedrockTool[];
 
   constructor(params: AmazonBedrockOrchestratorParams) {
     this.client = new MomentoClient({
@@ -95,8 +109,20 @@ export class AmazonBedrockOrchestrator {
     this.maxTokens = params.config?.maxTokens || DEFAULTS.MAX_TOKENS;
     this.tokenWarningThreshold = params.config?.tokenWarningThreshold || (this.maxTokens ? Math.floor(this.maxTokens * 0.8) : 8000);
     this.preserveThinkingTags = params.config?.preserveThinkingTags || false;
-
+    this.additionalSystemPrompt = params.config?.systemPrompt;
     this.logger = new OrchestratorLogger(params.config?.debug || false, 'Bedrock');
+    
+    this.tools = [
+      invokeAgentTool,
+      ...(params.tools?.map((t) => ({
+        spec: {
+          name: t.name,
+          description: t.description,
+          inputSchema: { json: z.toJSONSchema(t.schema) as any }
+        },
+        handler: t.handler
+      })) || [])
+    ];
     this.logger.info('Orchestrator initialized', {
       model: this.model,
       maxTokens: this.maxTokens,
@@ -189,7 +215,7 @@ export class AmazonBedrockOrchestrator {
               // Execute the tool
               let toolResult: any;
               try {
-                const tool = tools.find(t => t.spec.name === toolName);
+                const tool = this.tools.find(t => t.spec.name === toolName);
                 if (!tool) {
                   throw new Error(`Unknown tool: ${toolName}`);
                 }
@@ -339,9 +365,9 @@ export class AmazonBedrockOrchestrator {
         }
 
         // Check what type of content we received
-        const toolUseItems = messageContent.filter((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
+          const toolUseItems = messageContent.filter((item): item is ContentBlock & { toolUse: ToolUseBlock; } =>
           'toolUse' in item && !!item.toolUse
-        );
+          );
         const textItems = messageContent.filter((item): item is ContentBlock & { text: string; } =>
           'text' in item && !!item.text
         );
@@ -360,7 +386,7 @@ export class AmazonBedrockOrchestrator {
 
             let toolResult: any;
             try {
-              const tool = tools.find(t => t.spec.name === toolName);
+              const tool = this.tools.find(t => t.spec.name === toolName);
               if (!tool) {
                 throw new Error(`Unknown tool: ${toolName}`);
               }
@@ -503,14 +529,14 @@ export class AmazonBedrockOrchestrator {
   }
 
   private buildConverseCommand(agentCards: AgentCard[], messages: Message[], contextId?: string, maxTokens?: number): ConverseCommand {
-    const system = getSystemPrompt({ agentCards, contextId });
+    const system = getSystemPrompt({ agentCards, contextId, additionalSystemPrompt: this.additionalSystemPrompt });
     this.logger.logTokenEstimate('System prompt', system);
     const params = {
       modelId: this.model,
       system: [{ text: system }],
       messages,
       toolConfig: {
-        tools: [{ toolSpec: invokeAgentTool.spec }]
+        tools: this.tools.map((t) => ({ toolSpec: t.spec }))
       },
       ...(maxTokens && { inferenceConfig: { maxTokens } })
     };
@@ -518,16 +544,16 @@ export class AmazonBedrockOrchestrator {
   }
 
   private buildConverseStreamCommand(agentCards: AgentCard[], messages: Message[], contextId?: string, maxTokens?: number): ConverseStreamCommand {
-    const system = getSystemPrompt({ agentCards, contextId });
+    const system = getSystemPrompt({ agentCards, contextId, additionalSystemPrompt: this.additionalSystemPrompt });
     this.logger.logTokenEstimate('System prompt', system);
     const params = {
       modelId: this.model,
       system: [{ text: system }],
       messages,
       toolConfig: {
-        tools: [{ toolSpec: invokeAgentTool.spec }]
+        tools: this.tools.map((t) => ({ toolSpec: t.spec }))
       },
-      ...(maxTokens && { inferenceConfig: { maxTokens } })
+    ...(maxTokens && { inferenceConfig: { maxTokens } })
     };
     return new ConverseStreamCommand(params);
   }

@@ -3,66 +3,89 @@ import { AgentCard } from "../types";
 export type GetSystemPromptParams = {
   agentCards: AgentCard[];
   contextId?: string;
+  additionalSystemPrompt?: string;
 };
 
 export const getSystemPrompt = (params: GetSystemPromptParams): string => {
-  return `You are an autonomous orchestration agent with full authority to satisfy user requests by delegating to available specialized agents.
+  return `You are an autonomous orchestration agent responsible for satisfying user requests either directly or by delegating to specialized agents.
 
-You are given:
-- A block of A2A agent cards describing each agent's capabilities.
-- A user prompt describing a task to be completed.
-- A single tool available to you: 'invokeAgent'.
+CAPABILITIES
+- Direct response: Answer conversational queries or use your own tools when appropriate
+- Delegation: Route specialized tasks to available agents via the 'invokeAgent' tool
+- Multi-step planning: Break complex requests into sequential agent calls
+- Result synthesis: Consolidate agent responses into clear, natural language answers
 
-Your responsibilities:
-1. Understand the user's intent and determine which agents (from the agent cards) are capable of completing the request.
-2. If multiple steps are required, break the request into a high-level plan. Use 'invokeAgent' to execute each step in the correct order.
-3. Always include relevant task context when interacting with an agent so it has enough information to act accurately.
-4. Do not ask the user to confirm which agent to use — that is your job. Assume full routing authority.
-5. Return the final result in natural language, clearly summarizing what was done and what was learned.
-6. If a response from an agent is insufficient, refine the task and try again.
-7. If no agents exist that can satisfy a task, return a response indicating the task cannot be carried out.
-
-About the 'invokeAgent' tool:
-- It sends a task to a specific agent.
-- You must specify: 'agentUrl', 'message', 'contextId' and optionally 'taskId'.
-- You will receive a final message from the agent.
-
-Use 'invokeAgent' whenever you need to delegate a task.
+RESPONSIBILITIES
+1. Analyze the user's intent and determine the best approach (direct answer vs. delegation)
+2. If you can satisfy the request with your own capabilities, do so immediately
+3. If specialized agents are needed, identify the appropriate agent(s) from the provided cards
+4. For multi-step tasks, execute 'invokeAgent' calls in the correct sequence with proper context
+5. Never ask users to confirm routing decisions — you have full authority
+6. If agent responses are insufficient, refine and retry
+7. If no suitable agents exist, clearly explain what cannot be done
+8. Always return consolidated results in natural language
 
 ---
-EXAMPLES OF DELEGATION
+DECISION PRIORITY
+
+1. If the request is conversational or doesn't require specialized capabilities → answer directly
+2. If you have non-delegation tools that can complete the task → use them
+3. If specialized agent capabilities are needed → delegate via 'invokeAgent'
+4. If no suitable agents exist → explain what's not possible
+
+---
+THE 'invokeAgent' TOOL
+- Delegates a task to a specific agent
+- Required parameters: 'agentUrl', 'message', 'contextId' (if provided below)
+- Optional parameter: 'taskId'
+- Returns the agent's final response
+
+---
+DELEGATION EXAMPLES
 
 User: "What's the weather in Rome tomorrow?"
-→ Use 'invokeAgent' with 'agentUrl' = "https://agent.workers.dev/weather"' and task = "Get the weather forecast for Rome tomorrow."
+→ invokeAgent(agentUrl="https://agent.workers.dev/weather", message="Get the weather forecast for Rome tomorrow")
 
 User: "Find me a place to stay in Seattle this weekend and tell me if it will be sunny."
-→ Step 1: Ask WeatherAgent for the forecast in Seattle.
-→ Step 2: Ask AirbnbAgent to find lodging in Seattle, and include the weather in your prompt.
-→ Return both results clearly.
-
+→ Step 1: Get Seattle weather forecast from WeatherAgent
+→ Step 2: Find Seattle lodging from AirbnbAgent, mentioning the weather
+→ Return consolidated results
+${params.additionalSystemPrompt ? `
 ---
-AGENT CARDS
+ADDITIONAL INSTRUCTIONS
+
+The following are user-provided instructions that supplement the above guidelines. Follow them carefully, but continue to adhere to your core responsibilities of routing, delegation, and providing consolidated responses.
+
+${params.additionalSystemPrompt}
+` : ''}
+---
+AVAILABLE AGENTS
 
 ${params.agentCards.map((card) => agentCardToPromptFormat(card)).join('\n\n')}
 
 ---
-OTHER CONTEXT
+CONTEXT
 
-It is currently ${new Date().toISOString()}.
-${params.contextId ? `Provide context id "${params.contextId}" to the invokeAgent tool when making a call.` : ''}
+Current time: ${new Date().toISOString()}
+${params.contextId ? `Context ID: "${params.contextId}" (include this in all invokeAgent calls)` : ''}
 
 ---
-You are precise, efficient, and fully capable of autonomous planning and agent coordination. When all your steps are completed, return a consolidated, meaningful answer as a response. If you can answer the user query yourself without calling tools, please do so.
-`;
+Be precise, efficient, and autonomous in your planning and coordination.`;
 };
 
 const agentCardToPromptFormat = (card: AgentCard): string => {
+  const skillsList = card.skills.map((skill) => {
+    const examples = skill.examples && skill.examples.length > 0
+      ? skill.examples.map(ex => `      • ${ex}`).join('\n')
+      : '      None';
+    return `  - ${skill.name}: ${skill.description}
+    Examples:
+${examples}`;
+  }).join('\n');
+
   return `Agent: ${card.name}
-    Description: ${card.description}
-    Url: ${card.url}
-    Skills:
-    ${card.skills.map((skill) => `- ${skill.name}: ${skill.description}
-       Examples:
-         ${(skill.examples && skill.examples.length > 0) ? skill.examples?.join('\n') : 'None.'}`).join('\n')}
-    `;
+Description: ${card.description}
+URL: ${card.url}
+Skills:
+${skillsList}`;
 };

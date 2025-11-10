@@ -4,9 +4,16 @@ import { MomentoClient } from '../src/momento/client';
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { AGENT_LIST } from '../src/momento/agent_registry';
 import { AgentCard } from '../src/types';
+import * as z from 'zod/v4';
 
 vi.mock('../src/momento/client');
-vi.mock('@aws-sdk/client-bedrock-runtime');
+vi.mock('@aws-sdk/client-bedrock-runtime', () => {
+  return {
+    BedrockRuntimeClient: vi.fn(),
+    ConverseCommand: vi.fn().mockImplementation((params) => ({ input: params })),
+    ConverseStreamCommand: vi.fn().mockImplementation((params) => ({ input: params }))
+  } as any;
+});
 
 const dummyCard: AgentCard = {
   version: '1.0',
@@ -238,4 +245,101 @@ describe('AmazonBedrockOrchestrator', () => {
   });
 
 
+  it('should include additionalSystemPrompt in system prompt', async () => {
+    orchestrator = new AmazonBedrockOrchestrator({
+      momento: { apiKey: 'test-key', cacheName: 'test-cache' },
+      config: { systemPrompt: 'Use tools aggressively and summarize at the end.' }
+    });
+    orchestrator['\u005fagentCards'] = [dummyCard];
+
+    mockBedrockSend.mockResolvedValue({
+      output: { message: { content: [{ text: 'ok' }] } }
+    });
+
+    await orchestrator.sendMessage({ message: 'Hi' });
+    expect(mockBedrockSend).toHaveBeenCalled();
+    const cmd = mockBedrockSend.mock.calls[0][0];
+    const systemText = cmd.input?.system?.[0]?.text || '';
+    expect(systemText).toContain('ADDITIONAL INSTRUCTIONS');
+    expect(systemText).toContain('Use tools aggressively and summarize at the end.');
+  });
+
+});
+
+describe('AmazonBedrockOrchestrator - custom tools', () => {
+  let orchestrator: AmazonBedrockOrchestrator;
+  let mockBedrockSend: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (MomentoClient as unknown as Mock).mockImplementation(() => ({ get: vi.fn(), set: vi.fn() }));
+    mockBedrockSend = vi.fn();
+    (BedrockRuntimeClient as any).mockImplementation(() => ({ send: mockBedrockSend }));
+  });
+
+  it('should include user-provided tools in toolConfig', async () => {
+    const customTool = {
+      name: 'getTime',
+      description: 'Get current time',
+      schema: z.object({ tz: z.string().optional() }),
+      handler: vi.fn().mockResolvedValue('00:00')
+    };
+
+    orchestrator = new AmazonBedrockOrchestrator({
+      momento: { apiKey: 'key', cacheName: 'cache' },
+      tools: [customTool]
+    });
+    // Prepare one agent card so isReady passes
+    orchestrator['\u005fagentCards'] = [dummyCard];
+
+    // First call returns final text so we can inspect command input
+    mockBedrockSend.mockResolvedValueOnce({
+      output: { message: { content: [{ text: 'ok' }] } }
+    });
+
+    await orchestrator.sendMessage({ message: 'hi' });
+
+    expect(mockBedrockSend).toHaveBeenCalled();
+    const cmd = mockBedrockSend.mock.calls[0][0];
+    const tools = cmd.input?.toolConfig?.tools?.map((t: any) => t.toolSpec?.name);
+    expect(tools).toContain('invokeAgent');
+    expect(tools).toContain('getTime');
+  });
+
+  it('should execute a user-provided tool when called by the model', async () => {
+    const echoTool = {
+      name: 'echoThing',
+      description: 'Echo the provided text',
+      schema: z.object({ text: z.string() }),
+      handler: vi.fn().mockImplementation(async ({ text }: { text: string }) => `ECHO:${text}`)
+    };
+
+    orchestrator = new AmazonBedrockOrchestrator({
+      momento: { apiKey: 'key', cacheName: 'cache' },
+      tools: [echoTool]
+    });
+    orchestrator['\u005fagentCards'] = [dummyCard];
+
+    // 1st model response: tool call
+    mockBedrockSend.mockResolvedValueOnce({
+      output: {
+        message: {
+          content: [
+            { toolUse: { toolUseId: 't1', name: 'echoThing', input: { text: 'hello' } } }
+          ]
+        }
+      }
+    });
+    // 2nd model response: final text after tool result
+    mockBedrockSend.mockResolvedValueOnce({
+      output: {
+        message: { content: [{ text: 'done' }] }
+      }
+    });
+
+    const result = await orchestrator.sendMessage({ message: 'use the tool' });
+    expect(result).toBe('done');
+    expect(echoTool.handler).toHaveBeenCalledWith({ text: 'hello' });
+    expect(mockBedrockSend).toHaveBeenCalledTimes(2);
+  });
 });

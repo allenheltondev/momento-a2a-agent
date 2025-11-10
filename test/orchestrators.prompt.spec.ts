@@ -66,7 +66,7 @@ describe('getSystemPrompt', () => {
 
   it('includes the ISO date', () => {
     const result = getSystemPrompt({ agentCards: mockAgentCards });
-    expect(result).toContain(`It is currently ${mockDate}.`);
+    expect(result).toContain(`Current time: ${mockDate}`);
   });
 
   it('includes contextId if provided', () => {
@@ -74,19 +74,19 @@ describe('getSystemPrompt', () => {
       agentCards: mockAgentCards,
       contextId: 'abc-123'
     });
-    expect(result).toContain('Provide context id "abc-123" to the invokeAgent tool');
+    expect(result).toContain('Context ID: "abc-123" (include this in all invokeAgent calls)');
   });
 
   it('does not include contextId section if not provided', () => {
     const result = getSystemPrompt({ agentCards: mockAgentCards });
-    expect(result).not.toContain('Provide context id');
+    expect(result).not.toContain('Context ID:');
   });
 
   it('includes key system instructions and delegation examples', () => {
     const result = getSystemPrompt({ agentCards: mockAgentCards });
     expect(result).toMatch(/You are an autonomous orchestration agent/i);
-    expect(result).toMatch(/EXAMPLES OF DELEGATION/i);
-    expect(result).toMatch(/→ Step 1: Ask WeatherAgent/i);
+    expect(result).toMatch(/DELEGATION EXAMPLES/i);
+    expect(result).toMatch(/→ Step 1:.*WeatherAgent/i);
   });
 
   it('includes examples from agent card', () => {
@@ -94,5 +94,12 @@ describe('getSystemPrompt', () => {
     expect(result).toContain('Examples:');
     expect(result).toContain('What is the weather in Rome tomorrow?');
     expect(result).toContain('Where can I stay in Rome for under $100')
+  });
+
+  it('includes additional system instructions when provided', () => {
+    const extra = 'Always verify data sources before answering.';
+    const result = getSystemPrompt({ agentCards: mockAgentCards, additionalSystemPrompt: extra });
+    expect(result).toContain('ADDITIONAL INSTRUCTIONS');
+    expect(result).toContain(extra);
   });
 });

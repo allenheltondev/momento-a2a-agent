@@ -7,7 +7,8 @@ import { register } from './momento/agent_registry';
 
 export { OpenAIOrchestrator } from './orchestrators/openai';
 export { AmazonBedrockOrchestrator } from './orchestrators/amazon_bedrock';
-export type { Task, Message, AgentSkill, AgentCard } from './types'
+export type { Task, Message, AgentSkill, AgentCard } from './types';
+export type { PublishUpdateFn } from './agent/executor';
 export interface CreateMomentoAgentOptions extends A2AServerOptions {
   defaultTtlSeconds?: number;
   registerAgent?: boolean;

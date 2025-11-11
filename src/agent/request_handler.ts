@@ -53,7 +53,7 @@ export class MomentoAgentRequestHandler {
   async verifyConnection(): Promise<boolean> {
     return await this.client.isValidConnection();
   }
-  
+
   async getAgentCard(): Promise<AgentCard> {
     return this.agentCard;
   }
@@ -107,7 +107,41 @@ export class MomentoAgentRequestHandler {
         let finalTask: Task | undefined = undefined;
         try {
           for await (const event of eventQueue.events()) {
-            await resultManager.processEvent(event);
+            try {
+              await resultManager.processEvent(event);
+            } catch (err: any) {
+              console.error("Error processing event", {
+                contextId,
+                taskId: task?.id,
+                messageId: msg.messageId,
+                eventKind: (event as any)?.kind,
+                error: err,
+                stack: err instanceof Error ? err.stack : undefined,
+              });
+
+              const failedEvent: TaskStatusUpdateEvent = {
+                kind: "status-update",
+                taskId: task?.id || uuidv4(),
+                contextId,
+                status: {
+                  state: "failed",
+                  message: {
+                    ...msg,
+                    parts: [
+                      {
+                        kind: "text",
+                        text: `Event processing failed: ${err?.message ?? String(err)}`,
+                      },
+                    ],
+                  },
+                  timestamp: new Date().toISOString(),
+                },
+                final: true,
+              };
+              await this.eventBus.publish(failedEvent);
+              throw err;
+            }
+
             if (
               (event.kind === "task" && isFinal(event.status.state)) ||
               (event.kind === "status-update" && event.final && isFinal(event.status.state))
@@ -116,18 +150,34 @@ export class MomentoAgentRequestHandler {
               break;
             }
           }
+        } catch (error: any) {
+          console.error("sendMessage: unhandled error while processing events", {
+            contextId,
+            taskId: task?.id,
+            messageId: msg.messageId,
+            error,
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+          throw error;
         } finally {
+          // Stop the queue; it will handle unregistering its context listener.
           eventQueue.stop();
-          this.eventBus.unregisterContext(contextId);
         }
 
-        if (!finalTask) throw new Error("No final task result");
+        if (!finalTask) {
+          const possible = resultManager.getFinalResult?.();
+          if (possible && (possible as any).kind === "task") {
+            return possible as Task;
+          }
+          throw A2AError.internalError(
+            `No final task result (contextId=${contextId}, taskId=${task?.id ?? "n/a"}, messageId=${msg.messageId}).`
+          );
+        }
         return finalTask;
       })(),
       new Promise<never>((_, reject) =>
         setTimeout(() => {
           eventQueue.stop();
-          this.eventBus.unregisterContext(contextId);
           reject(A2AError.internalError("Timeout waiting for agent execution."));
         }, 30_000)
       )

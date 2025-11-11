@@ -103,4 +103,22 @@ describe("MomentoAgentExecutor", () => {
     expect(events.at(-1)?.status?.state).toBe("failed");
     expect(events.at(-1)?.status?.message.parts[0].text).toContain("fail!");
   });
+
+  it("allows handler to publish custom status updates", async () => {
+    const handleTask = vi.fn().mockImplementation(async (message, { publishUpdate }) => {
+      await publishUpdate("Step 1 complete");
+      await publishUpdate("Step 2 complete");
+      return "All done!";
+    });
+    const executor = new MomentoAgentExecutor(handleTask);
+
+    await executor.execute(mockMsg, eventBus, { task: mockTask });
+    const events = eventBus.getEvents();
+
+    // Should have: initial working, custom status 1, custom status 2, final completed
+    const statusUpdates = events.filter(e => e.kind === "status-update");
+    expect(statusUpdates.length).toBeGreaterThanOrEqual(3);
+    expect(statusUpdates[1].status.message.parts[0].text).toBe("Step 1 complete");
+    expect(statusUpdates[2].status.message.parts[0].text).toBe("Step 2 complete");
+  });
 });

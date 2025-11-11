@@ -165,12 +165,12 @@ export default {
 
 | Parameter   | Type                                                       | Required | Description                                                                 | Default   |
 | ----------- | ---------------------------------------------------------- | -------- | --------------------------------------------------------------------------- | --------- |
-| `cacheName` | `string`                                                   | Yes      | Name of the Momento cache to use for state and events.                      |           |
-| `apiKey`    | `string`                                                   | Yes      | Momento API key (can be stored in Cloudflare Secrets).                      |           |
-| `skills`    | `AgentCard['skills']`                                      | Yes      | Array of skills this agent provides, for discoverability and documentation. |           |
-| `handler`   | `(message: Message, ctx: { task?: Task }) => Promise<any>` | Yes      | Async function handling each incoming message.                              |           |
-| `agentCard` | `Partial<AgentCard>`                                       | No       | Customize agent metadata (name, description, url, etc).                     | See below |
-| `options`   | `CreateMomentoAgentOptions`                                | No       | Extra options for TTL, CORS, and agent registration.                        | See below |
+| `cacheName` | `string`                                                                                    | Yes      | Name of the Momento cache to use for state and events.                      |           |
+| `apiKey`    | `string`                                                                                    | Yes      | Momento API key (can be stored in Cloudflare Secrets).                      |           |
+| `skills`    | `AgentCard['skills']`                                                                       | Yes      | Array of skills this agent provides, for discoverability and documentation. |           |
+| `handler`   | `(message: Message, ctx: { task: Task; publishUpdate: PublishUpdateFn }) => Promise<any>` | Yes      | Async function handling each incoming message.                              |           |
+| `agentCard` | `Partial<AgentCard>`                                                                        | No       | Customize agent metadata (name, description, url, etc).                     | See below |
+| `options`   | `CreateMomentoAgentOptions`                                                                 | No       | Extra options for TTL, CORS, and agent registration.                        | See below |
 
 #### `agentCard` fields
 
@@ -192,6 +192,28 @@ export default {
 | `defaultTtlSeconds` | `number`                                  | Default task TTL (expiration) in seconds.                  | `3600`  |
 | `registerAgent`     | `boolean`                                 | If `true`, registers agent in Momento for global discovery | `false` |
 | `enableCors`        | `boolean \| { origin, headers, methods }` | Enable/disable/configure CORS headers.                     | `false` |
+
+### Publishing status updates
+
+The handler receives a `publishUpdate` function in its context that allows you to send real-time status updates during task execution. This is useful for long-running tasks where you want to provide progress updates to clients.
+
+```ts
+handler: async (message, { task, publishUpdate }) => {
+  // Publish a status update
+  await publishUpdate('Processing your request...');
+
+  // Do some work
+  const result = await doSomeWork();
+
+  // Publish another update
+  await publishUpdate('Almost done, finalizing results...');
+
+  // Return final result
+  return `Completed: ${result}`;
+}
+```
+
+The `publishUpdate` function accepts a single string parameter containing the status message text. It automatically wraps the message in the proper A2A format and publishes it as a "working" state update.
 
 ### Agent registration and discovery
 

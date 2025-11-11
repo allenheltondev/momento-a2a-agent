@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { Message, Task, TaskStatusUpdateEvent, Artifact } from "../types";
+import { Message, Task, TaskStatusUpdateEvent, Artifact, TaskState } from "../types";
 import { IExecutionEventBus } from "../event/event_bus";
 
 export type MomentoAgentHandlerResult =
@@ -11,7 +11,12 @@ export type MomentoAgentHandlerResult =
   }
   | Partial<Task>;
 
-export type HandleTaskFn = (message: Message, context: { task: Task; }) => Promise<MomentoAgentHandlerResult>;
+export type PublishUpdateFn = (message: string) => Promise<void>;
+
+export type HandleTaskFn = (
+  message: Message,
+  context: { task: Task; publishUpdate: PublishUpdateFn; }
+) => Promise<MomentoAgentHandlerResult>;
 
 export interface MomentoAgentExecutorOptions {
   agentName?: string;
@@ -58,8 +63,30 @@ export class MomentoAgentExecutor {
     };
     await eventBus.publish(workingUpdate);
 
+    const publishUpdate: PublishUpdateFn = async (text: string) => {
+      const statusUpdate: TaskStatusUpdateEvent = {
+        kind: "status-update",
+        taskId: task.id,
+        contextId: task.contextId,
+        status: {
+          state: "working",
+          message: {
+            ...message,
+            parts: [{ kind: "text", text }],
+          },
+          timestamp: new Date().toISOString(),
+        },
+        final: false,
+        metadata: {
+          agentName: this.agentName,
+          agentId: this.agentId,
+        },
+      };
+      await eventBus.publish(statusUpdate);
+    };
+
     try {
-      const handlerResult = await this.handleTask(message, { task });
+      const handlerResult = await this.handleTask(message, { task, publishUpdate });
       let resultTask: Task = { ...task };
 
       if (typeof handlerResult === "string") {

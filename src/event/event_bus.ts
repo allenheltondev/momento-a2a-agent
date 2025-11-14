@@ -14,6 +14,7 @@ export interface IExecutionEventBus {
   off(eventName: "event", listener: (event: AgentExecutionEvent) => void): this;
   once(eventName: "event", listener: (event: AgentExecutionEvent) => void): this;
   removeAllListeners(eventName?: "event"): this;
+  registerContext(contextId: string): void;
   onContext(contextId: string, listener: (event: AgentExecutionEvent) => void): this;
   unregisterContext(contextId: string): void;
 }

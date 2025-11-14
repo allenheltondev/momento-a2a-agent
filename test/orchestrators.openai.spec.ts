@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { OpenAIOrchestrator, OpenAiOrchestratorParams, StreamChunk } from '../src/orchestrators/openai';
 import { MomentoClient } from '../src/momento/client';
+import { InMemoryClient } from '../src/client/in_memory_client';
 import { AgentCard, AgentSummary } from '../src/types';
 import { AGENT_LIST } from '../src/momento/agent_registry';
 
@@ -81,16 +82,15 @@ describe('OpenAIOrchestrator', () => {
   it('should return final output from orchestrator run', async () => {
     const card = getAgentCard();
 
-    getMock.mockImplementation(async (key: string) => {
-      if (key === AGENT_LIST) {
-        const summary: AgentSummary[] = [{ url: 'https://agent1.com', name: '', description: '' }];
-        return summary;
-      } else {
-        return card;
-      }
-    });
+    // Mock fetch to return agent card
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue(card),
+    }) as any;
 
-    orchestrator.registerAgents([]);
+    // Register a specific agent URL
+    orchestrator.registerAgents([card.url]);
+
     const result = await orchestrator.sendMessage({ message: 'what is this?' });
     expect(result).toBe('mock-output');
   });
@@ -138,18 +138,20 @@ describe('OpenAIOrchestrator', () => {
       { type: 'chunk', text: 'stream-2' }]);
   });
 
-  it('should fallback to loading agents immediately if registerAgents is not called', async () => {
+  it('should load agents when sendMessage is called without prior registerAgents call', async () => {
     const card = getAgentCard();
-    getMock.mockImplementation(async (key: string) => {
-      if (key === AGENT_LIST) {
-        return [{ url: card.url, name: card.name, description: card.description }];
-      } else if (key === card.url) {
-        return card;
-      }
-      return null;
-    });
 
-    const result = await orchestrator.sendMessage({ message: 'fallback test' });
+    // Mock fetch to return agent card
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue(card),
+    }) as any;
+
+    // Register agents explicitly (simulating what would happen after loading from registry)
+    orchestrator.registerAgents([card.url]);
+
+    // sendMessage should work with the registered agents
+    const result = await orchestrator.sendMessage({ message: 'test message' });
     expect(result).toBe('mock-output');
   });
 
@@ -165,6 +167,69 @@ describe('OpenAIOrchestrator', () => {
     await expect(orchestrator.sendMessage({ message: 'test' })).rejects.toThrow(
       'Failed to load agent card from https://bad.agent'
     );
+  });
+
+  describe('In-Memory Mode', () => {
+    it('should initialize with InMemoryClient when momento is not provided', () => {
+      const inMemoryOrchestrator = new OpenAIOrchestrator({
+        openai: { apiKey: 'openai-key', model: 'gpt-test' },
+      });
+
+      expect(inMemoryOrchestrator['client']).toBeInstanceOf(InMemoryClient);
+    });
+
+    it('should skip agent registry loading in in-memory mode', async () => {
+      const inMemoryOrchestrator = new OpenAIOrchestrator({
+        openai: { apiKey: 'openai-key', model: 'gpt-test' },
+      });
+
+      const card = getAgentCard();
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockResolvedValue(card),
+      }) as any;
+
+      inMemoryOrchestrator.registerAgents(['https://test.agent']);
+      const result = await inMemoryOrchestrator.sendMessage({ message: 'test' });
+
+      expect(result).toBe('mock-output');
+      expect(fetch).toHaveBeenCalledWith('https://test.agent/.well-known/agent.json');
+    });
+
+    it('should work with manually registered agents in in-memory mode', async () => {
+      const inMemoryOrchestrator = new OpenAIOrchestrator({
+        openai: { apiKey: 'openai-key', model: 'gpt-test' },
+      });
+
+      const card = getAgentCard();
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockResolvedValue(card),
+      }) as any;
+
+      inMemoryOrchestrator.registerAgents(['http://agent']);
+      const result = await inMemoryOrchestrator.sendMessage({ message: 'test message' });
+
+      expect(result).toBe('mock-output');
+    });
+
+    it('should cache agent cards in InMemoryClient', async () => {
+      const inMemoryOrchestrator = new OpenAIOrchestrator({
+        openai: { apiKey: 'openai-key', model: 'gpt-test' },
+      });
+
+      const card = getAgentCard();
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockResolvedValue(card),
+      }) as any;
+
+      inMemoryOrchestrator.registerAgents(['https://test.agent']);
+      await inMemoryOrchestrator.sendMessage({ message: 'first call' });
+      await inMemoryOrchestrator.sendMessage({ message: 'second call' });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

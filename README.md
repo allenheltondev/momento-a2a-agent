@@ -10,6 +10,158 @@ A production-ready TypeScript package for building stateless [A2A agents](https:
 npm install momento-a2a-agent
 ```
 
+## Local Development Mode
+
+This package supports running agents locally without Momento infrastructure, making it easy to develop and test agents without external dependencies. When you don't provide a Momento API key, the package automatically switches to an in-memory fallback mode.
+
+### Quick Start (No Momento Required)
+
+```ts
+import { createAgent } from "momento-a2a-agent";
+
+const app = await createAgent({
+  skills: [{
+    id: "echo",
+    name: "Echo",
+    description: "Repeats your message.",
+    tags: ['echo']
+  }],
+  handler: async (message) => {
+    const part: any = message.parts?.[0];
+    return `Echo: ${part.text ?? ""}`;
+  },
+  agentCard: {
+    name: 'Echo agent',
+    description: 'An agent that echoes input'
+  }
+});
+
+// Use with your server framework
+```
+
+When running in local mode, you'll see a warning:
+```
+Running in local in-memory mode. State will not persist across restarts.
+```
+
+### Momento vs In-Memory Mode
+
+| Feature | Momento Mode | In-Memory Mode |
+|---------|-------------|----------------|
+| **Setup** | Requires API key and cache | No setup required |
+| **Persistence** | Tasks persist across restarts | Lost on restart |
+| **Scalability** | Horizontally scalable | Single process only |
+| **Agent Discovery** | Global registry available | Manual registration only |
+| **Event Streaming** | Real-time via Topics | In-process events |
+| **Use Case** | Production deployments | Local development & testing |
+| **Cost** | Momento pricing applies | Free |
+
+### Using createAgent (Recommended)
+
+The `createAgent` function works in both modes:
+
+```ts
+// Local development (in-memory mode)
+const app = await createAgent({
+  skills: [...],
+  handler: async (message) => { ... }
+});
+
+// Production (Momento mode)
+const app = await createAgent({
+  cacheName: "mcp",
+  apiKey: process.env.MOMENTO_API_KEY,
+  skills: [...],
+  handler: async (message) => { ... }
+});
+```
+
+### Orchestrators with Optional Momento
+
+Both orchestrators support in-memory mode for local testing:
+
+#### OpenAI Orchestrator (Local Mode)
+
+```ts
+import { OpenAIOrchestrator } from 'momento-a2a-agent';
+
+const orchestrator = new OpenAIOrchestrator({
+  openai: {
+    apiKey: 'YOUR_OPENAI_API_KEY',
+    model: 'gpt-4o'
+  }
+  // No momento config = in-memory mode
+});
+
+// Manually register agents
+orchestrator.registerAgents([
+  'https://weather.agent',
+  'https://hotel.agent'
+]);
+
+const response = await orchestrator.sendMessage({
+  message: 'Book me a room in Austin this weekend and check the weather.'
+});
+```
+
+#### Amazon Bedrock Orchestrator (Local Mode)
+
+```ts
+import { AmazonBedrockOrchestrator } from 'momento-a2a-agent';
+
+const orchestrator = new AmazonBedrockOrchestrator({
+  bedrock: {
+    modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+  }
+  // No momento config = in-memory mode
+});
+
+orchestrator.registerAgents([
+  'https://weather.agent',
+  'https://calendar.agent'
+]);
+
+const response = await orchestrator.sendMessage({
+  message: 'Check my calendar and get the weather for tomorrow.'
+});
+```
+
+### Limitations of In-Memory Mode
+
+When running without Momento, be aware of these limitations:
+
+- **No Persistence**: Task state is lost when the process restarts
+- **Single Process**: State is not shared across multiple instances
+- **No Agent Discovery**: Cannot use the global agent registry (must manually register agents)
+- **No Agent Registration**: Agents cannot register themselves for discovery by others
+- **Development Only**: Not suitable for production deployments
+
+In-memory mode is perfect for local development, testing, and demos, but production deployments should use Momento for reliability and scale.
+
+### Migration from createMomentoAgent
+
+If you're using the legacy `createMomentoAgent` function, migrate to `createAgent`:
+
+```ts
+// Old (deprecated)
+const app = await createMomentoAgent({
+  cacheName: "mcp",
+  apiKey: "...",
+  skills: [...],
+  handler: async (message) => { ... }
+});
+
+// New (recommended)
+const app = await createAgent({
+  cacheName: "mcp",
+  apiKey: "...",
+  skills: [...],
+  handler: async (message) => { ... }
+});
+```
+
+The `createMomentoAgent` function still works but will be removed in v2.0.0. It now shows a deprecation warning and internally calls `createAgent`.
+
 ## In this package
 
 This package provides:
@@ -35,9 +187,11 @@ Agents can also be registered for global discovery, removing the need for config
 
 This approach unlocks true cloud-native A2A agents that are elastic, observable, and discoverable right out of the box.
 
-## Prerequsisites
+## Prerequisites
 
-To use this to build an agent, you must create a [Momento API key](https://console.gomomento.com/api-keys) with **super user permissions**. You will also need to create a cache in your Momento account. That's it! The rest is handled for you via the package.
+For **local development**, no prerequisites are needed - the package works out of the box in in-memory mode.
+
+For **production deployments** with Momento, you must create a [Momento API key](https://console.gomomento.com/api-keys) with **super user permissions**. You will also need to create a cache in your Momento account. That's it! The rest is handled for you via the package.
 
 ## A2A Servers
 
@@ -46,7 +200,7 @@ The brains of the operation, A2A servers are what handles the processing of task
 ### Example: Minimal Cloudflare Worker
 
 ```ts
-import { createMomentoAgent } from "momento-a2a-agent";
+import { createAgent } from "momento-a2a-agent";
 
 type Env = {
   MOMENTO_API_KEY: { get(): Promise<string> };
@@ -56,7 +210,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		try {
 			const apiKey = await env.MOMENTO_API_KEY.get();
-			const app = await createMomentoAgent({
+			const app = await createAgent({
 				cacheName: "mcp",
 				apiKey,
 				skills: [{ id: "echo", name: "Echo", description: "Repeats your message.", tags: ['echo'] }],
@@ -81,7 +235,7 @@ export default {
 ### Example: Advanced Worker with Claude and MCP server
 
 ```ts
-import { createMomentoAgent } from "momento-a2a-agent";
+import { createAgent } from "momento-a2a-agent";
 import type { Message } from "momento-a2a-agent";
 import Anthropic from "@anthropic-ai/sdk";
 import type { BetaMessageParam } from "@anthropic-ai/sdk/resources/beta/messages/messages.mjs";
@@ -91,9 +245,9 @@ type Env = {
   ANTHROPIC_API_KEY: { get(): Promise<string>};
 };
 
-let agent: ReturnType<typeof createMomentoAgent> | undefined;
+let agent: ReturnType<typeof createAgent> | undefined;
 
-async function createAgent(){
+async function initializeAgent(){
   const anthropicApiKey = await env.ANTHROPIC_API_KEY.get();
   const claude = new Anthropic({ apiKey: anthropicApiKey});
 
@@ -125,7 +279,7 @@ async function createAgent(){
   }
 
   const momentoApiKey = await env.MOMENTO_API_KEY.get();
-  agent = await createMomentoAgent({
+  agent = await createAgent({
     cacheName: "ai",
     apiKey: momentoApiKey,
     skills: [{
@@ -153,7 +307,7 @@ async function createAgent(){
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if(!agent){
-      agent = await createAgent();
+      agent = await initializeAgent();
     }
     return agent.fetch(request, env, ctx);
   }
@@ -161,16 +315,16 @@ export default {
 
 ```
 
-#### `createMomentoAgent` fields
+#### `createAgent` fields
 
 | Parameter   | Type                                                       | Required | Description                                                                 | Default   |
 | ----------- | ---------------------------------------------------------- | -------- | --------------------------------------------------------------------------- | --------- |
-| `cacheName` | `string`                                                                                    | Yes      | Name of the Momento cache to use for state and events.                      |           |
-| `apiKey`    | `string`                                                                                    | Yes      | Momento API key (can be stored in Cloudflare Secrets).                      |           |
+| `cacheName` | `string`                                                                                    | No*      | Name of the Momento cache to use for state and events. *Required when using Momento mode. | `"local"` in in-memory mode |
+| `apiKey`    | `string`                                                                                    | No       | Momento API key. If omitted or empty, runs in local in-memory mode.        |           |
 | `skills`    | `AgentCard['skills']`                                                                       | Yes      | Array of skills this agent provides, for discoverability and documentation. |           |
 | `handler`   | `(message: Message, ctx: { task: Task; publishUpdate: PublishUpdateFn }) => Promise<any>` | Yes      | Async function handling each incoming message.                              |           |
 | `agentCard` | `Partial<AgentCard>`                                                                        | No       | Customize agent metadata (name, description, url, etc).                     | See below |
-| `options`   | `CreateMomentoAgentOptions`                                                                 | No       | Extra options for TTL, CORS, and agent registration.                        | See below |
+| `options`   | `CreateAgentOptions`                                                                        | No       | Extra options for TTL, CORS, and agent registration.                        | See below |
 
 #### `agentCard` fields
 
@@ -346,8 +500,8 @@ await orchestrator.sendMessageStreamWithCallback({ message: 'What is on the sche
 
 | Property                  | Type                     | Required | Description                                                                 | Default    |
 |---------------------------|--------------------------|----------|-----------------------------------------------------------------------------|------------|
-| `momento.apiKey`          | `string`                 | ✅       | A Momento API key with access to the target cache                          |            |
-| `momento.cacheName`       | `string`                 | ✅       | Name of the Momento cache to use for agent discovery and metadata storage  |            |
+| `momento.apiKey`          | `string`                 | ❌       | A Momento API key with access to the target cache. If omitted, uses in-memory mode. |            |
+| `momento.cacheName`       | `string`                 | ❌       | Name of the Momento cache to use for agent discovery and metadata storage. If omitted, uses in-memory mode.  |            |
 | `openai.apiKey`           | `string`                 | ✅       | OpenAI API key used for agent execution                                    |            |
 | `openai.model`            | `string`                 | ❌       | Model name                                                                 | `'o4-mini'`|
 | `config.maxTokens`        | `number`                 | ❌       | Maximum tokens for OpenAI responses                                        | `4000`     |
@@ -491,8 +645,8 @@ await orchestrator.sendMessageStreamWithCallback(
 
 | Property                  | Type                     | Required | Description                                                                 | Default                                      |
 |---------------------------|--------------------------|----------|-----------------------------------------------------------------------------|----------------------------------------------|
-| `momento.apiKey`          | `string`                 | ✅       | A Momento API key with access to the target cache                          |                                              |
-| `momento.cacheName`       | `string`                 | ✅       | Name of the Momento cache to use for agent discovery and metadata storage  |                                              |
+| `momento.apiKey`          | `string`                 | ❌       | A Momento API key with access to the target cache. If omitted, uses in-memory mode. |                                              |
+| `momento.cacheName`       | `string`                 | ❌       | Name of the Momento cache to use for agent discovery and metadata storage. If omitted, uses in-memory mode.  |                                              |
 | `bedrock.region`          | `string`                 | ❌       | AWS region for Bedrock service                                             | Provided in runtime                          |
 | `bedrock.modelId`         | `string`                 | ❌       | Bedrock model identifier                                                   | `'amazon.nova-lite-v1:0'` |
 | `bedrock.accessKeyId`     | `string`                 | ❌       | AWS access key id to use                                                   | Provided in runtime                          |

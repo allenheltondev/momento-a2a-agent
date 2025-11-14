@@ -1,5 +1,6 @@
 import { Agent, run, setDefaultOpenAIKey, tool } from '@openai/agents';
 import { MomentoClient } from '../momento/client.js';
+import { InMemoryClient } from '../client/in_memory_client.js';
 import { AGENT_LIST } from '../momento/agent_registry.js';
 import { AgentCard, AgentSummary } from '../types.js';
 import { invokeAgent } from '../client/tools.js';
@@ -9,7 +10,7 @@ import { OrchestratorLogger } from './logger.js';
 import { sanitizeResponse } from './utils.js';
 
 export type OpenAiOrchestratorParams = {
-  momento: {
+  momento?: {
     apiKey: string;
     cacheName: string;
   };
@@ -53,7 +54,7 @@ const invokeAgentTool = tool({
  * Orchestrates conversations between the user and distributed A2A agents using OpenAI.
  */
 export class OpenAIOrchestrator {
-  private client: MomentoClient;
+  private client: MomentoClient | InMemoryClient;
   private model: string;
   private agentUrls: string[] = [];
   private concurrencyLimit: number;
@@ -65,10 +66,14 @@ export class OpenAIOrchestrator {
   private preserveThinkingTags: boolean;
 
   constructor(params: OpenAiOrchestratorParams) {
-    this.client = new MomentoClient({
-      apiKey: params.momento.apiKey,
-      cacheName: params.momento.cacheName
-    });
+    if (params.momento) {
+      this.client = new MomentoClient({
+        apiKey: params.momento.apiKey,
+        cacheName: params.momento.cacheName
+      });
+    } else {
+      this.client = new InMemoryClient();
+    }
 
     setDefaultOpenAIKey(params.openai.apiKey);
     this.model = params.openai.model || 'o4-mini';
@@ -229,8 +234,14 @@ export class OpenAIOrchestrator {
   private async loadAgents(): Promise<AgentCard[]> {
     const agentLogger = this.logger.child('AgentLoader');
 
-    const registeredAgents = await this.client.get<AgentSummary[]>(AGENT_LIST, { format: 'json' }) ?? [];
-    agentLogger.info(`Found ${registeredAgents.length} registered agents`);
+    let registeredAgents: AgentSummary[] = [];
+
+    if (this.client instanceof MomentoClient) {
+      registeredAgents = await this.client.get<AgentSummary[]>(AGENT_LIST, { format: 'json' }) ?? [];
+      agentLogger.info(`Found ${registeredAgents.length} registered agents`);
+    } else {
+      agentLogger.info('Skipping agent registry loading (in-memory mode)');
+    }
 
     const allAgents = [...new Set([...this.agentUrls ?? [], ...registeredAgents.filter((ra) => ra.url).map((ra) => ra.url)])];
     agentLogger.info(`Total unique agent URLs to load: ${allAgents.length}`);
@@ -256,23 +267,24 @@ export class OpenAIOrchestrator {
   private async loadAgentCard(url: string): Promise<AgentCard> {
     const cardLogger = this.logger.child('AgentCard');
 
-    let card = await this.client.get<AgentCard>(url, { format: 'json' });
-    if (!card) {
-      cardLogger.log(`Fetching from: ${url}/.well-known/agent.json`);
-
-      const response = await fetch(`${url}/.well-known/agent.json`);
-      if (!response.ok) {
-        const body = await response.text();
-        cardLogger.error(`Failed to fetch from ${url}:`, response.status, body);
-        throw new Error(`Failed to load agent card from ${url}`);
-      }
-
-      card = await response.json() as AgentCard;
-      await this.client.set(url, card);
-      cardLogger.log(`Cached agent card for: ${url}`);
-    } else {
+    const cachedCard = await this.client.get(url, { format: 'json' });
+    if (cachedCard) {
       cardLogger.log(`Using cached agent card for: ${url}`);
+      return cachedCard as unknown as AgentCard;
     }
+
+    cardLogger.log(`Fetching from: ${url}/.well-known/agent.json`);
+
+    const response = await fetch(`${url}/.well-known/agent.json`);
+    if (!response.ok) {
+      const body = await response.text();
+      cardLogger.error(`Failed to fetch from ${url}:`, response.status, body);
+      throw new Error(`Failed to load agent card from ${url}`);
+    }
+
+    const card = await response.json() as AgentCard;
+    await this.client.set(url, card);
+    cardLogger.log(`Cached agent card for: ${url}`);
 
     return card;
   }

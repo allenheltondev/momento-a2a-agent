@@ -59,11 +59,27 @@ describe('MomentoAgentRequestHandler', () => {
   let handler: MomentoAgentRequestHandler;
 
   beforeEach(() => {
+    const mockTaskStore = {
+      load: vi.fn(),
+      save: vi.fn(),
+    };
+    const mockEventBus = {
+      registerContext: vi.fn(),
+      unregisterContext: vi.fn(),
+      publish: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      once: vi.fn(),
+      removeAllListeners: vi.fn(),
+      onContext: vi.fn(),
+    };
     handler = new MomentoAgentRequestHandler({
       momentoApiKey: 'key',
       cacheName: 'cache',
       agentCard,
-      executor
+      executor,
+      taskStore: mockTaskStore as any,
+      eventBus: mockEventBus as any,
     });
   });
 
@@ -109,11 +125,27 @@ describe('MomentoAgentRequestHandler', () => {
   });
 
   it('throws if push notifications are not supported', async () => {
+    const mockTaskStore = {
+      load: vi.fn(),
+      save: vi.fn(),
+    };
+    const mockEventBus = {
+      registerContext: vi.fn(),
+      unregisterContext: vi.fn(),
+      publish: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      once: vi.fn(),
+      removeAllListeners: vi.fn(),
+      onContext: vi.fn(),
+    };
     const noPushHandler = new MomentoAgentRequestHandler({
       momentoApiKey: 'key',
       cacheName: 'cache',
       agentCard: { ...agentCard, capabilities: {} },
       executor,
+      taskStore: mockTaskStore as any,
+      eventBus: mockEventBus as any,
     });
 
     await expect(noPushHandler.setTaskPushNotificationConfig({

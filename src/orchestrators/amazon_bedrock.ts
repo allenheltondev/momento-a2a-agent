@@ -2,6 +2,7 @@
 import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import type { Message, ContentBlock, ToolUseBlock, ToolResultBlock } from '@aws-sdk/client-bedrock-runtime';
 import { MomentoClient } from '../momento/client.js';
+import { InMemoryClient } from '../client/in_memory_client.js';
 import { AGENT_LIST } from '../momento/agent_registry.js';
 import { AgentCard, AgentSummary } from '../types.js';
 import { invokeAgent } from '../client/tools.js';
@@ -12,7 +13,7 @@ import { OrchestratorLogger } from './logger.js';
 import { sanitizeResponse } from './utils.js';
 
 export type AmazonBedrockOrchestratorParams = {
-  momento: {
+  momento?: {
     apiKey: string;
     cacheName: string;
   };
@@ -68,7 +69,7 @@ type BedrockTool = typeof invokeAgentTool;
  * Orchestrates conversations between the user and distributed A2A agents using Amazon Bedrock.
  */
 export class AmazonBedrockOrchestrator {
-  private client: MomentoClient;
+  private client: MomentoClient | InMemoryClient;
   private model: string;
   private agentUrls: string[] = [];
   private concurrencyLimit: number;
@@ -83,10 +84,14 @@ export class AmazonBedrockOrchestrator {
   private tools: BedrockTool[];
 
   constructor(params: AmazonBedrockOrchestratorParams) {
-    this.client = new MomentoClient({
-      apiKey: params.momento.apiKey,
-      cacheName: params.momento.cacheName
-    });
+    if (params.momento) {
+      this.client = new MomentoClient({
+        apiKey: params.momento.apiKey,
+        cacheName: params.momento.cacheName
+      });
+    } else {
+      this.client = new InMemoryClient();
+    }
 
     this.bedrock = new BedrockRuntimeClient({
       ...(params.bedrock?.accessKeyId && params.bedrock?.secretAccessKey) && {
@@ -500,8 +505,18 @@ export class AmazonBedrockOrchestrator {
   }
 
   private async loadAgents(): Promise<AgentCard[]> {
-    const registeredAgents = await this.client.get<AgentSummary[]>(AGENT_LIST, { format: 'json' }) ?? [];
+    let registeredAgents: AgentSummary[] = [];
+
+    if (this.client instanceof MomentoClient) {
+      registeredAgents = await this.client.get<AgentSummary[]>(AGENT_LIST, { format: 'json' }) ?? [];
+      this.logger.info(`Found ${registeredAgents.length} registered agents`);
+    } else {
+      this.logger.info('Skipping agent registry loading (in-memory mode)');
+    }
+
     const allAgents = [...new Set([...this.agentUrls ?? [], ...registeredAgents.filter((ra) => ra.url).map((ra) => ra.url)])];
+    this.logger.info(`Total unique agent URLs to load: ${allAgents.length}`);
+
     const results: AgentCard[] = [];
 
     for (let i = 0; i < allAgents.length; i += this.concurrencyLimit) {
@@ -510,11 +525,12 @@ export class AmazonBedrockOrchestrator {
       results.push(...chunkResults);
     }
 
+    this.logger.info(`Successfully loaded ${results.length} agent cards`);
     return results;
   }
 
   private async loadAgentCard(url: string): Promise<AgentCard> {
-    let card = await this.client.get<AgentCard>(url, { format: 'json' });
+    let card: AgentCard | undefined = await this.client.get(url, { format: 'json' }) as AgentCard | undefined;
     if (!card) {
       const response = await fetch(`${url}/.well-known/agent.json`);
       if (!response.ok) {

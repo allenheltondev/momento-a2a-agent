@@ -266,6 +266,74 @@ describe('AmazonBedrockOrchestrator', () => {
 
 });
 
+describe('AmazonBedrockOrchestrator - in-memory mode', () => {
+  let orchestrator: AmazonBedrockOrchestrator;
+  let mockBedrockSend: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockBedrockSend = vi.fn();
+    (BedrockRuntimeClient as any).mockImplementation(() => ({ send: mockBedrockSend }));
+  });
+
+  it('should initialize without momento config', () => {
+    orchestrator = new AmazonBedrockOrchestrator({});
+    expect(orchestrator).toBeDefined();
+    expect(orchestrator['client']).toBeDefined();
+  });
+
+  it('should skip agent registry loading in in-memory mode', async () => {
+    orchestrator = new AmazonBedrockOrchestrator({});
+    orchestrator.registerAgents([dummyCard.url]);
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(dummyCard)
+    });
+
+    await orchestrator['getAgentCards']();
+    expect(orchestrator['_agentCards']).toHaveLength(1);
+  });
+
+  it('should cache agent cards in memory', async () => {
+    orchestrator = new AmazonBedrockOrchestrator({});
+    orchestrator.registerAgents([dummyCard.url]);
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(dummyCard)
+    });
+
+    await orchestrator['getAgentCards']();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    await orchestrator['getAgentCards']();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should work with manually registered agents in in-memory mode', async () => {
+    orchestrator = new AmazonBedrockOrchestrator({});
+    orchestrator.registerAgents([dummyCard.url]);
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(dummyCard)
+    });
+
+    mockBedrockSend.mockResolvedValue({
+      output: {
+        message: {
+          content: [{ text: 'Response in memory mode' }]
+        }
+      }
+    });
+
+    await orchestrator['getAgentCards']();
+    const response = await orchestrator.sendMessage({ message: 'Test' });
+    expect(response).toBe('Response in memory mode');
+  });
+});
+
 describe('AmazonBedrockOrchestrator - custom tools', () => {
   let orchestrator: AmazonBedrockOrchestrator;
   let mockBedrockSend: any;

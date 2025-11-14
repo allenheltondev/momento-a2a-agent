@@ -18,6 +18,9 @@ vi.mock("../src/momento/client", () => {
 describe("index exports", () => {
   it("exports expected API surface", () => {
     expect(entry).toHaveProperty("createMomentoAgent");
+    expect(entry).toHaveProperty("createAgent");
+    expect(entry).toHaveProperty("InMemoryTaskStore");
+    expect(entry).toHaveProperty("InMemoryEventBus");
   });
 });
 
@@ -95,5 +98,99 @@ describe("createMomentoAgent", () => {
       options: { defaultTtlSeconds: 42, basePath: "/foo" },
     });
     expect(typeof app.fetch).toBe("function");
+  });
+});
+
+describe("createAgent", () => {
+  let handler: any;
+  beforeEach(() => {
+    handler = vi.fn().mockResolvedValue("ok");
+  });
+
+  it("throws if skills array is empty", async () => {
+    await expect(
+      entry.createAgent({
+        skills: [],
+        handler,
+      })
+    ).rejects.toThrow(/At least one skill/i);
+  });
+
+  it("runs in memory mode when apiKey is not provided", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const app = await entry.createAgent({
+      skills: ["foo"],
+      handler,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/Running in local in-memory mode/i)
+    );
+    expect(typeof app.fetch).toBe("function");
+    warn.mockRestore();
+  });
+
+  it("runs in memory mode when apiKey is empty string", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const app = await entry.createAgent({
+      apiKey: "",
+      skills: ["foo"],
+      handler,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/Running in local in-memory mode/i)
+    );
+    expect(typeof app.fetch).toBe("function");
+    warn.mockRestore();
+  });
+
+  it("uses Momento mode when apiKey is provided", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const app = await entry.createAgent({
+      cacheName: "c",
+      apiKey: "k",
+      skills: ["foo"],
+      handler,
+      agentCard: { url: "http://x" },
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/Running in local in-memory mode/i)
+    );
+    expect(typeof app.fetch).toBe("function");
+    warn.mockRestore();
+  });
+
+  it("throws if cacheName is missing in Momento mode", async () => {
+    await expect(
+      entry.createAgent({
+        apiKey: "k",
+        skills: ["foo"],
+        handler,
+      })
+    ).rejects.toThrow(/cacheName is required when using Momento/i);
+  });
+
+  it("uses default cacheName 'local' in memory mode", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const app = await entry.createAgent({
+      skills: ["foo"],
+      handler,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/Running in local in-memory mode/i)
+    );
+    expect(typeof app.fetch).toBe("function");
+    warn.mockRestore();
+  });
+
+  it("does not warn about agent url in memory mode", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await entry.createAgent({
+      skills: ["foo"],
+      handler,
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/configure your agent url/i)
+    );
+    warn.mockRestore();
   });
 });

@@ -10,9 +10,9 @@ import {
   PushNotificationConfig,
   TaskPushNotificationConfig,
 } from "../types";
-import { MomentoTaskStore, TaskStore } from "../store/task_store";
+import { TaskStore } from "../store/task_store";
 import { MomentoClient } from "../momento/client";
-import { MomentoEventBus } from "../event/event_bus";
+import { IExecutionEventBus } from "../event/event_bus";
 import { MomentoAgentExecutor } from "../agent/executor";
 import { A2AError } from "../server/error";
 import { ResultManager } from "../server/result_manager";
@@ -24,29 +24,31 @@ const PREFIX = {
 };
 
 export interface MomentoAgentRequestHandlerOptions {
-  momentoApiKey: string;
-  cacheName: string;
+  momentoApiKey?: string;
+  cacheName?: string;
   defaultTtlSeconds?: number;
   agentCard: AgentCard;
   executor: MomentoAgentExecutor;
+  taskStore: TaskStore;
+  eventBus: IExecutionEventBus;
 }
 
 export class MomentoAgentRequestHandler {
   private readonly agentCard: AgentCard;
   private readonly taskStore: TaskStore;
   private readonly client: MomentoClient;
-  private readonly eventBus: MomentoEventBus;
+  private readonly eventBus: IExecutionEventBus;
   private readonly executor: MomentoAgentExecutor;
 
   constructor(opts: MomentoAgentRequestHandlerOptions) {
     this.agentCard = opts.agentCard;
-    this.taskStore = new MomentoTaskStore(opts.cacheName, opts.momentoApiKey);
+    this.taskStore = opts.taskStore;
     this.client = new MomentoClient({
-      apiKey: opts.momentoApiKey,
-      cacheName: opts.cacheName,
+      apiKey: opts.momentoApiKey || '',
+      cacheName: opts.cacheName || 'local',
       defaultTtlSeconds: opts.defaultTtlSeconds ?? 300,
     });
-    this.eventBus = new MomentoEventBus(opts.cacheName, opts.momentoApiKey);
+    this.eventBus = opts.eventBus;
     this.executor = opts.executor;
   }
 

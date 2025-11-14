@@ -23,6 +23,12 @@ export type OpenAiOrchestratorParams = {
     debug?: boolean;
     tokenWarningThreshold?: number;
     preserveThinkingTags?: boolean;
+    tools?: Array<{
+      name: string;
+      description: string;
+      schema: any;
+      handler: (input: any) => Promise<any> | any;
+    }>;
   };
   agentLoadingConcurrency?: number; // Keep for backward compatibility
 };
@@ -30,6 +36,7 @@ export type OpenAiOrchestratorParams = {
 export type SendMessageParams = {
   message: string;
   contextId?: string;
+  publishUpdate?: (text: string) => Promise<void>;
 };
 
 /**
@@ -41,13 +48,81 @@ export type StreamChunk =
   | { type: 'chunk'; text: string; }
   | { type: 'final'; text: string; };
 
-const invokeAgentTool = tool({
-  name: invokeAgent.name,
-  description: invokeAgent.description,
-  strict: true,
-  parameters: invokeAgent.schema,
-  execute: invokeAgent.handler
-});
+function createInvokeAgentTool(publishUpdate?: (text: string) => Promise<void>) {
+  return tool({
+    name: invokeAgent.name,
+    description: invokeAgent.description,
+    strict: true,
+    parameters: invokeAgent.schema,
+    execute: async (input: any) => {
+      const toolName = invokeAgent.name;
+
+      if (publishUpdate) {
+        await publishUpdate(`Invoking tool: ${toolName}`);
+      }
+
+      let result: any;
+      let toolError: string | undefined;
+      try {
+        result = await invokeAgent.handler(input);
+      } catch (error: any) {
+        toolError = error.message;
+        throw error;
+      } finally {
+        if (publishUpdate) {
+          const statusMessage = toolError
+            ? `Tool ${toolName} failed: ${toolError}`
+            : `Tool ${toolName} completed successfully`;
+          await publishUpdate(statusMessage);
+        }
+      }
+
+      return result;
+    }
+  });
+}
+
+function createCustomTool(
+  customTool: {
+    name: string;
+    description: string;
+    schema: any;
+    handler: (input: any) => Promise<any> | any;
+  },
+  publishUpdate?: (text: string) => Promise<void>
+) {
+  return tool({
+    name: customTool.name,
+    description: customTool.description,
+    strict: true,
+    parameters: customTool.schema,
+    execute: async (input: any) => {
+      const toolName = customTool.name;
+
+      if (publishUpdate) {
+        await publishUpdate(`Invoking tool: ${toolName}`);
+      }
+
+      let result: any;
+      let toolError: string | undefined;
+      try {
+        result = await customTool.handler(input);
+      } catch (error: any) {
+        toolError = error.message;
+        throw error;
+      } finally {
+        if (publishUpdate) {
+          const statusMessage = toolError
+            ? `Tool ${toolName} failed: ${toolError}`
+            : `Tool ${toolName} completed successfully`;
+          await publishUpdate(statusMessage);
+        }
+      }
+
+      return result;
+    }
+  });
+}
 
 /**
  * Orchestrates conversations between the user and distributed A2A agents using OpenAI.
@@ -63,6 +138,12 @@ export class OpenAIOrchestrator {
   private _agentCards: AgentCard[] | null = null;
   private _loadingPromise: Promise<AgentCard[]> | null = null;
   private preserveThinkingTags: boolean;
+  private customTools: Array<{
+    name: string;
+    description: string;
+    schema: any;
+    handler: (input: any) => Promise<any> | any;
+  }>;
 
   constructor(params: OpenAiOrchestratorParams) {
     this.client = new MomentoClient({
@@ -76,6 +157,7 @@ export class OpenAIOrchestrator {
     this.maxTokens = params.config?.maxTokens;
     this.tokenWarningThreshold = params.config?.tokenWarningThreshold || (this.maxTokens ? Math.floor(this.maxTokens * 0.8) : 8000);
     this.preserveThinkingTags = params.config?.preserveThinkingTags || false;
+    this.customTools = params.config?.tools || [];
 
     this.logger = new OrchestratorLogger(params.config?.debug || false, 'OpenAI');
 
@@ -83,7 +165,8 @@ export class OpenAIOrchestrator {
       model: this.model,
       maxTokens: this.maxTokens,
       tokenWarningThreshold: this.tokenWarningThreshold,
-      concurrencyLimit: this.concurrencyLimit
+      concurrencyLimit: this.concurrencyLimit,
+      customToolsCount: this.customTools.length
     });
   }
 
@@ -133,7 +216,7 @@ export class OpenAIOrchestrator {
       this.logger.info(`Sending message with ${agentCards.length} available agents`);
       this.logger.logTokenEstimate('Input message', params.message);
 
-      const agent = this.buildAgent(agentCards, params.contextId);
+      const agent = this.buildAgent(agentCards, params.contextId, params.publishUpdate);
 
       const response = await run(agent, params.message, { stream: false });
 
@@ -161,7 +244,7 @@ export class OpenAIOrchestrator {
     this.logger.info(`Starting stream with ${agentCards.length} available agents`);
     this.logger.logTokenEstimate('Input message', params.message);
 
-    const agent = this.buildAgent(agentCards, params.contextId);
+    const agent = this.buildAgent(agentCards, params.contextId, params.publishUpdate);
 
     try {
       const stream = await run(agent, params.message, { stream: true });
@@ -277,7 +360,7 @@ export class OpenAIOrchestrator {
     return card;
   }
 
-  private buildAgent(agentCards: AgentCard[], contextId?: string): Agent {
+  private buildAgent(agentCards: AgentCard[], contextId?: string, publishUpdate?: (text: string) => Promise<void>): Agent {
     const instructions = getSystemPrompt({ agentCards, contextId });
 
     // Check if we're approaching token limits
@@ -286,18 +369,25 @@ export class OpenAIOrchestrator {
       this.logger.warn(`System prompt approaching token limit: ${estimatedTokens} tokens (threshold: ${this.tokenWarningThreshold})`);
     }
 
+    // Build tools array: custom tools + invokeAgent tool
+    const tools = [
+      ...this.customTools.map(t => createCustomTool(t, publishUpdate)),
+      createInvokeAgentTool(publishUpdate)
+    ];
+
     this.logger.info('Building agent', {
       model: this.model,
       agentCount: agentCards.length,
       contextId: contextId ? `${contextId.substring(0, 8)}...` : 'none',
       maxTokens: this.maxTokens,
-      instructionsTokens: estimatedTokens
+      instructionsTokens: estimatedTokens,
+      toolsCount: tools.length
     });
 
     return new Agent({
       model: this.model,
       name: 'A2A Orchestrator',
-      tools: [invokeAgentTool],
+      tools,
       instructions,
       ...this.maxTokens && { modelSettings: { maxTokens: this.maxTokens } }
     });

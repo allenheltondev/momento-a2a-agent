@@ -171,6 +171,7 @@ export default {
 | `handler`   | `(message: Message, ctx: { task: Task; publishUpdate: PublishUpdateFn }) => Promise<any>` | Yes      | Async function handling each incoming message.                              |           |
 | `agentCard` | `Partial<AgentCard>`                                                                        | No       | Customize agent metadata (name, description, url, etc).                     | See below |
 | `options`   | `CreateMomentoAgentOptions`                                                                 | No       | Extra options for TTL, CORS, and agent registration.                        | See below |
+| `type`      | `AgentType`                                                                                 | No       | Agent type: `"worker"` or `"supervisor"`. Affects status update behavior.   | `"worker"` |
 
 #### `agentCard` fields
 
@@ -193,6 +194,52 @@ export default {
 | `registerAgent`     | `boolean`                                 | If `true`, registers agent in Momento for global discovery | `false` |
 | `enableCors`        | `boolean \| { origin, headers, methods }` | Enable/disable/configure CORS headers.                     | `false` |
 
+### Agent Types
+
+Agents can be created as either **worker** agents or **supervisor** agents by specifying the `type` parameter:
+
+#### Worker Agents (default)
+
+Worker agents execute specific tasks and are the default agent type. When using the unified creation functions (`createBedrockAgent` or `createOpenAIAgent`), worker agents use orchestrators with custom tools, providing automatic status updates for tool invocations.
+
+For basic agents without orchestration, use `createMomentoAgent` directly:
+
+```ts
+const basicAgent = await createMomentoAgent({
+  cacheName: 'ai',
+  apiKey: process.env.MOMENTO_API_KEY,
+  type: 'worker', // Optional, this is the default
+  skills: [{
+    id: 'weather',
+    name: 'Get Weather',
+    description: 'Gets weather information',
+    tags: ['weather']
+  }],
+  handler: async (message, { publishUpdate }) => {
+    await publishUpdate('Fetching weather data...');
+    return 'Sunny, 72°F';
+  }
+});
+```
+
+For worker agents with orchestration and automatic tool status updates, use the unified creation functions (see examples below).
+
+#### Supervisor Agents
+
+Supervisor agents coordinate multiple worker agents using orchestration. When you create a supervisor agent, tool invocation status updates are automatically published, providing visibility into orchestration progress.
+
+For supervisor agents, it's recommended to use the unified creation functions `createBedrockAgent` or `createOpenAIAgent` instead of `createMomentoAgent` directly. See the [Unified Agent Creation](#unified-agent-creation) section below.
+
+#### AgentType
+
+The `AgentType` is exported from the package and can be used for type safety:
+
+```ts
+import { AgentType } from 'momento-a2a-agent';
+
+const agentType: AgentType = 'supervisor';
+```
+
 ### Publishing status updates
 
 The handler receives a `publishUpdate` function in its context that allows you to send real-time status updates during task execution. This is useful for long-running tasks where you want to provide progress updates to clients.
@@ -214,6 +261,16 @@ handler: async (message, { task, publishUpdate }) => {
 ```
 
 The `publishUpdate` function accepts a single string parameter containing the status message text. It automatically wraps the message in the proper A2A format and publishes it as a "working" state update.
+
+#### Status Updates for Supervisor Agents
+
+When orchestrators invoke tools, they automatically publish status updates in the following format:
+
+- **Before tool invocation**: `"Invoking tool: {toolName}"`
+- **After successful completion**: `"Tool {toolName} completed successfully"`
+- **After failure**: `"Tool {toolName} failed: {errorMessage}"`
+
+These updates are published through the same event bus as worker agent updates and include the agent type in their metadata, allowing subscribers to distinguish between worker and supervisor events.
 
 ### Agent registration and discovery
 
@@ -263,11 +320,212 @@ Here's a sample JSON-RPC response from an agent:
 
 You can stream all events and state transitions live, or load the latest task state from anywhere.
 
+### Status Update Events
+
+All status updates published by agents include metadata that identifies the agent type. This allows subscribers to distinguish between worker and supervisor events:
+
+```json
+{
+  "kind": "status-update",
+  "taskId": "task-123",
+  "contextId": "ctx-1",
+  "status": {
+    "state": "working",
+    "message": {
+      "kind": "message",
+      "role": "agent",
+      "messageId": "msg-456",
+      "parts": [{ "kind": "text", "text": "Invoking tool: weatherAgent" }],
+      "contextId": "ctx-1",
+      "taskId": "task-123"
+    },
+    "timestamp": "2024-06-16T13:24:55.872Z"
+  },
+  "final": false,
+  "metadata": {
+    "agentName": "Task Coordinator",
+    "agentId": "task_coordinator",
+    "agentType": "supervisor"
+  }
+}
+```
+
+The `metadata.agentType` field will be either `"worker"` or `"supervisor"`, allowing you to filter or route events based on agent type.
+
 ## A2A Client
 
 A2A clients are simple in themselves, there's no magic involved. The client is initialized with an A2A server url, and it has the ability to send and parse messages to it. The [a2a-js](https://www.npmjs.com/package/@a2a-js/sdk) library does a solid job handling simple client management.
 
 However, if you want to take advantage of the registry we created with the A2A Server in this package, it's best to use the **orchestrators** provided.
+
+### Unified Agent Creation
+
+For a streamlined experience, use `createBedrockAgent` or `createOpenAIAgent` to create both worker and supervisor agents with a consistent API. Both agent types use orchestrators internally:
+
+- **Worker agents**: Use orchestrators with custom tools you provide
+- **Supervisor agents**: Use orchestrators with auto-discovered agents as tools
+
+Both types automatically publish status updates when tools are invoked, providing visibility into agent operations.
+
+#### `createBedrockAgent`
+
+Create worker or supervisor agents using Amazon Bedrock models.
+
+**Worker Agent Example:**
+
+Worker agents use orchestrators with custom tools. The orchestrator automatically publishes status updates when tools are invoked.
+
+```ts
+import { createBedrockAgent } from 'momento-a2a-agent';
+import * as z from 'zod/v4';
+
+const workerAgent = await createBedrockAgent({
+  type: 'worker',
+  cacheName: 'ai',
+  apiKey: process.env.MOMENTO_API_KEY,
+  skills: [{
+    id: 'weather',
+    name: 'Get Weather',
+    description: 'Gets weather information',
+    tags: ['weather']
+  }],
+  tools: [{
+    name: 'getWeather',
+    description: 'Gets current weather for a location',
+    schema: z.object({
+      location: z.string().describe('City name')
+    }),
+    handler: async (input) => {
+      // Custom weather logic
+      return { temp: 72, condition: 'Sunny' };
+    }
+  }],
+  agentCard: {
+    name: 'Weather Agent',
+    description: 'Provides weather information',
+    url: 'https://weather.example.com'
+  },
+  bedrock: {
+    modelId: 'amazon.nova-micro-v1:0'
+  }
+});
+```
+
+The orchestrator will automatically publish status updates like "Invoking tool: getWeather" and "Tool getWeather completed successfully".
+
+**Supervisor Agent Example:**
+
+```ts
+import { createBedrockAgent } from 'momento-a2a-agent';
+
+const supervisorAgent = await createBedrockAgent({
+  type: 'supervisor',
+  cacheName: 'ai',
+  apiKey: process.env.MOMENTO_API_KEY,
+  agentCard: {
+    name: 'Task Coordinator',
+    description: 'Coordinates multiple agents to complete complex tasks',
+    url: 'https://supervisor.example.com'
+  },
+  bedrock: {
+    modelId: 'amazon.nova-pro-v1:0',
+    region: 'us-east-1'
+  },
+  config: {
+    maxTokens: 4000,
+    debug: true,
+    // Optional: add custom tools alongside auto-discovered agents
+    tools: [{
+      name: 'getCurrentTime',
+      description: 'Gets the current time',
+      schema: z.object({}),
+      handler: async () => new Date().toISOString()
+    }]
+  },
+  options: {
+    registerAgent: true
+  }
+});
+```
+
+For supervisor agents:
+- No `skills` are required - a default orchestration skill is provided
+- The orchestrator automatically discovers and coordinates registered agents
+- Optional custom tools can be added via `config.tools`
+- Tool invocation status updates are published automatically for both custom tools and agent invocations
+
+#### `createOpenAIAgent`
+
+Create worker or supervisor agents using OpenAI models.
+
+**Worker Agent Example:**
+
+Worker agents use orchestrators with custom tools. The orchestrator automatically publishes status updates when tools are invoked.
+
+```ts
+import { createOpenAIAgent } from 'momento-a2a-agent';
+import * as z from 'zod/v4';
+
+const workerAgent = await createOpenAIAgent({
+  type: 'worker',
+  cacheName: 'ai',
+  apiKey: process.env.MOMENTO_API_KEY,
+  skills: [{
+    id: 'calendar',
+    name: 'Calendar Management',
+    description: 'Manages calendar events',
+    tags: ['calendar']
+  }],
+  tools: [{
+    name: 'getCalendar',
+    description: 'Gets calendar events for today',
+    schema: z.object({}),
+    handler: async () => {
+      // Custom calendar logic
+      return { events: ['Meeting at 10am', 'Lunch at 12pm', 'Review at 3pm'] };
+    }
+  }],
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY,
+    model: 'gpt-4o'
+  }
+});
+```
+
+The orchestrator will automatically publish status updates like "Invoking tool: getCalendar" and "Tool getCalendar completed successfully".
+
+**Supervisor Agent Example:**
+
+```ts
+import { createOpenAIAgent } from 'momento-a2a-agent';
+import * as z from 'zod/v4';
+
+const supervisorAgent = await createOpenAIAgent({
+  type: 'supervisor',
+  cacheName: 'ai',
+  apiKey: process.env.MOMENTO_API_KEY,
+  agentCard: {
+    name: 'AI Coordinator',
+    description: 'Orchestrates multiple AI agents',
+    url: 'https://coordinator.example.com'
+  },
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY,
+    model: 'gpt-4o'
+  },
+  config: {
+    maxTokens: 4000,
+    debug: false,
+    // Optional: add custom tools alongside auto-discovered agents
+    tools: [{
+      name: 'getCurrentTime',
+      description: 'Gets the current time',
+      schema: z.object({}),
+      handler: async () => new Date().toISOString()
+    }]
+  }
+});
+```
 
 ### Orchestrators
 
@@ -355,6 +613,7 @@ await orchestrator.sendMessageStreamWithCallback({ message: 'What is on the sche
 | `config.debug`           | `boolean`                 | ❌       | Enable detailed logging for debugging                                      | `false`    |
 | `config.tokenWarningThreshold` | `number`            | ❌       | Logs a warning when the task has crossed a specific estimated token usage  | `3200`     |
 | `config.preserveThinkingTags` | `boolean`            | ❌       | Indicate whether to include `<thinking>` tags from the llm in the response | `false`    |
+| `config.tools`                | `Array<{ name, description, schema, handler }>` | ❌ | Additional custom tools exposed to the LLM (Zod schema + handler) | `[]`       |
 
 #### AmazonBedrockOrchestrator
 
@@ -513,10 +772,11 @@ Please refer to the [AWS documentation](https://docs.aws.amazon.com/bedrock/late
 
 Both orchestrators support the same message parameters:
 
-| Property     | Type       | Required | Description                                                                 |
-|--------------|------------|----------|-----------------------------------------------------------------------------|
-| `message`    | `string`   | ✅       | The user message to route and respond to                                    |
-| `contextId`  | `string`   | ❌       | Optional context ID to use for invocation and continuity across sessions    |
+| Property        | Type                                  | Required | Description                                                                 |
+|-----------------|---------------------------------------|----------|-----------------------------------------------------------------------------|
+| `message`       | `string`                              | ✅       | The user message to route and respond to                                    |
+| `contextId`     | `string`                              | ❌       | Optional context ID to use for invocation and continuity across sessions    |
+| `publishUpdate` | `(text: string) => Promise<void>`     | ❌       | Optional callback for publishing status updates during orchestration        |
 
 ##### `StreamChunk`
 

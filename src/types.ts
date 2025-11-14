@@ -2103,3 +2103,5 @@ export type AgentSummary = {
   description: string;
   url: string;
 };
+
+export type AgentType = "worker" | "supervisor";

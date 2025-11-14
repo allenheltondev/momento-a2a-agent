@@ -42,6 +42,7 @@ export type AmazonBedrockOrchestratorParams = {
 export type SendMessageParams = {
   message: string;
   contextId?: string;
+  publishUpdate?: (text: string) => Promise<void>;
 };
 
 /**
@@ -213,8 +214,13 @@ export class AmazonBedrockOrchestrator {
 
               this.logger.info(`Iteration ${iteration + 1}: Tool called: ${toolName}`, { toolInput, toolUseId });
 
+              if (params.publishUpdate) {
+                await params.publishUpdate(`Invoking tool: ${toolName}`);
+              }
+
               // Execute the tool
               let toolResult: any;
+              let toolError: string | undefined;
               try {
                 const tool = this.tools.find(t => t.spec.name === toolName);
                 if (!tool) {
@@ -222,9 +228,17 @@ export class AmazonBedrockOrchestrator {
                 }
                 toolResult = await tool.handler(toolInput);
                 this.logger.info(`Tool ${toolName} result:`, toolResult);
-              } catch (toolError: any) {
-                this.logger.error(`Tool ${toolName} failed:`, toolError);
-                toolResult = { error: toolError.message };
+              } catch (error: any) {
+                toolError = error.message;
+                this.logger.error(`Tool ${toolName} failed:`, error);
+                toolResult = { error: error.message };
+              }
+
+              if (params.publishUpdate) {
+                const statusMessage = toolError
+                  ? `Tool ${toolName} failed: ${toolError}`
+                  : `Tool ${toolName} completed successfully`;
+                await params.publishUpdate(statusMessage);
               }
 
               // Add the tool result to our collection
@@ -385,7 +399,12 @@ export class AmazonBedrockOrchestrator {
 
             this.logger.info(`Stream iteration ${iteration}: Tool called: ${toolName}`, { toolInput, toolUseId });
 
+            if (params.publishUpdate) {
+              await params.publishUpdate(`Invoking tool: ${toolName}`);
+            }
+
             let toolResult: any;
+            let toolError: string | undefined;
             try {
               const tool = this.tools.find(t => t.spec.name === toolName);
               if (!tool) {
@@ -393,9 +412,17 @@ export class AmazonBedrockOrchestrator {
               }
               toolResult = await tool.handler(toolInput);
               this.logger.info(`Tool ${toolName} result:`, toolResult);
-            } catch (toolError: any) {
-              this.logger.error(`Tool ${toolName} failed:`, toolError);
-              toolResult = { error: toolError.message };
+            } catch (error: any) {
+              toolError = error.message;
+              this.logger.error(`Tool ${toolName} failed:`, error);
+              toolResult = { error: error.message };
+            }
+
+            if (params.publishUpdate) {
+              const statusMessage = toolError
+                ? `Tool ${toolName} failed: ${toolError}`
+                : `Tool ${toolName} completed successfully`;
+              await params.publishUpdate(statusMessage);
             }
 
             // Add the tool result to our collection

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { Message, Task, TaskStatusUpdateEvent, Artifact, TaskState } from "../types";
+import { Message, Task, TaskStatusUpdateEvent, Artifact, TaskState, AgentType } from "../types";
 import { IExecutionEventBus } from "../event/event_bus";
 
 export type MomentoAgentHandlerResult =
@@ -21,17 +21,20 @@ export type HandleTaskFn = (
 export interface MomentoAgentExecutorOptions {
   agentName?: string;
   agentId?: string;
+  agentType?: AgentType;
 }
 
 export class MomentoAgentExecutor {
   private readonly handleTask: HandleTaskFn;
   private readonly agentName?: string;
   private readonly agentId?: string;
+  private readonly agentType: AgentType;
 
   constructor(handleTask: HandleTaskFn, opts?: MomentoAgentExecutorOptions) {
     this.handleTask = handleTask;
     this.agentName = opts?.agentName;
     this.agentId = opts?.agentId;
+    this.agentType = opts?.agentType || 'worker';
   }
 
   async execute(message: Message, eventBus: IExecutionEventBus, context: { task?: Task; }): Promise<void> {
@@ -59,6 +62,7 @@ export class MomentoAgentExecutor {
       metadata: {
         agentName: this.agentName,
         agentId: this.agentId,
+        agentType: this.agentType,
       },
     };
     await eventBus.publish(workingUpdate);
@@ -80,6 +84,7 @@ export class MomentoAgentExecutor {
         metadata: {
           agentName: this.agentName,
           agentId: this.agentId,
+          agentType: this.agentType,
         },
       };
       await eventBus.publish(statusUpdate);
@@ -148,6 +153,7 @@ export class MomentoAgentExecutor {
         metadata: {
           agentName: this.agentName,
           agentId: this.agentId,
+          agentType: this.agentType,
         },
       };
       await eventBus.publish(completedUpdate);
@@ -176,6 +182,7 @@ export class MomentoAgentExecutor {
         metadata: {
           agentName: this.agentName,
           agentId: this.agentId,
+          agentType: this.agentType,
         },
       };
       await eventBus.publish(failedUpdate);

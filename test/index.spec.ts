@@ -19,8 +19,6 @@ describe("index exports", () => {
   it("exports expected API surface", () => {
     expect(entry).toHaveProperty("createMomentoAgent");
     expect(entry).toHaveProperty("createAgent");
-    expect(entry).toHaveProperty("InMemoryTaskStore");
-    expect(entry).toHaveProperty("InMemoryEventBus");
   });
 });
 

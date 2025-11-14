@@ -267,23 +267,24 @@ export class OpenAIOrchestrator {
   private async loadAgentCard(url: string): Promise<AgentCard> {
     const cardLogger = this.logger.child('AgentCard');
 
-    let card = await this.client.get<AgentCard>(url, { format: 'json' });
-    if (!card) {
-      cardLogger.log(`Fetching from: ${url}/.well-known/agent.json`);
-
-      const response = await fetch(`${url}/.well-known/agent.json`);
-      if (!response.ok) {
-        const body = await response.text();
-        cardLogger.error(`Failed to fetch from ${url}:`, response.status, body);
-        throw new Error(`Failed to load agent card from ${url}`);
-      }
-
-      card = await response.json() as AgentCard;
-      await this.client.set(url, card);
-      cardLogger.log(`Cached agent card for: ${url}`);
-    } else {
+    const cachedCard = await this.client.get(url, { format: 'json' });
+    if (cachedCard) {
       cardLogger.log(`Using cached agent card for: ${url}`);
+      return cachedCard as unknown as AgentCard;
     }
+
+    cardLogger.log(`Fetching from: ${url}/.well-known/agent.json`);
+
+    const response = await fetch(`${url}/.well-known/agent.json`);
+    if (!response.ok) {
+      const body = await response.text();
+      cardLogger.error(`Failed to fetch from ${url}:`, response.status, body);
+      throw new Error(`Failed to load agent card from ${url}`);
+    }
+
+    const card = await response.json() as AgentCard;
+    await this.client.set(url, card);
+    cardLogger.log(`Cached agent card for: ${url}`);
 
     return card;
   }
